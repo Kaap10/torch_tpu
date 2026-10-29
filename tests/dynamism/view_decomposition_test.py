@@ -802,6 +802,33 @@ class ViewDecompositionTest(seed_test_utils.RepeatableTest):
         self.assertEqual(node_view_ops[0][1][0], slice_op[0])
         self.assertEqual(self.guards_after, self.guards_before)
 
+  def test_zero_dim_view_with_storage_offset_is_not_decomposed(self):
+    """Tests that 0-d views with a storage offset are passed through as is."""
+    cases = [
+        torch.tensor([0, 1]).select(0, 1),
+        torch.arange(6.0).view(2, 3)[1, 2],
+    ]
+    for view in cases:
+      with self.subTest(view=view):
+        self.assertEqual(view.shape, ())
+        self.assertNotEqual(view.storage_offset(), 0)
+        self.assertIsNone(view_decomposition.decompose_into_view_sequence(view))
+        self.assertIs(view_decomposition.get_base_tensor(view), view)
+
+  def test_delinearize_storage_offset_zero_dims(self):
+    """Tests that a non-zero offset over zero dims raises, and 0 returns []."""
+    with self.assertRaises(  # ASSERT_RAISES_OK=internal signal.
+        NotImplementedError
+    ):
+      view_decomposition._delinearize_storage_offset(1, [])
+    self.assertEqual(view_decomposition._delinearize_storage_offset(0, []), [])
+
+  def test_zero_dim_tensor_without_offset_is_contiguous(self):
+    """Tests that a 0-d tensor at offset 0 goes through the contiguous path."""
+    scalar = torch.arange(3.0)[0]
+    self.assertIsNone(view_decomposition.decompose_into_view_sequence(scalar))
+    self.assertIs(view_decomposition.get_base_tensor(scalar), scalar)
+
 
 def _storage_numel(tensor: torch.Tensor) -> int:
   return tensor.untyped_storage().nbytes() // tensor.element_size()
