@@ -17,14 +17,21 @@
 #include "csrc/ops/copy_from/cpu_to_tpu.h"
 
 #include <memory>
+#include <optional>
 #include <utility>
 
 #include "ATen/core/ATen_fwd.h"
 #include "ATen/core/TensorBody.h"
+#include "absl/cleanup/cleanup.h"
 #include "absl/log/absl_log.h"
 #include "absl/status/status.h"
+#include "absl/status/statusor.h"
+#include "c10/core/ScalarType.h"
+#include "csrc/common/context_manager.h"
+#include "csrc/common/context_states.h"
 #include "csrc/common/error_utils.h"
 #include "csrc/common/layout_utils.h"
+#include "csrc/common/shape.h"
 #include "csrc/common/to_string.h"
 #include "csrc/eager/device_buffer.h"
 #include "csrc/eager/events_queue.h"
@@ -35,9 +42,48 @@
 #include "csrc/ops/copy_from/copy_common.h"
 #include "csrc/ops/copy_from/tpu_to_tpu.h"
 #include "csrc/pjrt/pjrt_transfer.h"
-#include "xla/xla_data.pb.h"
+#include "csrc/pjrt/pjrt_utils.h"
+#include "xla/layout.h"
 
 namespace torch_tpu {
+namespace {
+
+// Returns `tensor`'s layout on the TPU if it isn't the default for its shape,
+// e.g. the SparseCore layout of an embedding table.
+std::optional<xla::Layout> GetNonDefaultLayout(const at::Tensor& tensor) {
+  const absl::StatusOr<DeviceBufferRef> buffer = GetBuffer(tensor);
+  // Buffers in pinned host memory have host layouts.
+  if (!buffer.ok() || buffer->is_pinned_host() ||
+      !buffer->shape().layout().has_value() ||
+      IsDefaultDeviceLayout(*buffer->shape().layout(), buffer->element_type(),
+                            buffer->dimensions())) {
+    return std::nullopt;
+  }
+  const absl::StatusOr<xla::Layout> default_layout =
+      GetDefaultDeviceLayout(buffer->element_type(), buffer->dimensions());
+  if (!default_layout.ok()) return std::nullopt;
+  // The buffer's layout records the dtype's width as its element size. Like
+  // LayoutContext, use the default element size instead.
+  xla::Layout layout = ToXlaLayout(*buffer->shape().layout());
+  layout.set_element_size_in_bits(default_layout->element_size_in_bits());
+  return layout;
+}
+
+// Returns whether to convert `src` to `dest`'s dtype on the host, so that the
+// copy keeps `dest`'s layout. Otherwise, a TPU-to-TPU copy converts it, which
+// gives `dest` a buffer in the default layout.
+bool ShouldConvertOnHostToKeepLayout(const at::Tensor& src,
+                                     const at::Tensor& dest) {
+  // FP4 can't be converted on the host.
+  return src.sizes() == dest.sizes() &&
+         src.scalar_type() != dest.scalar_type() &&
+         src.scalar_type() != at::kFloat4_e2m1fn_x2 &&
+         dest.scalar_type() != at::kFloat4_e2m1fn_x2 &&
+         !GetContextState<LayoutContextState>().has_value() &&
+         GetNonDefaultLayout(dest).has_value();
+}
+
+}  // namespace
 
 absl::Status CopyCpuToTpu(const at::Tensor& src, const at::Tensor& dest,
                           TransferSyncMode transfer_sync_mode) {
@@ -46,6 +92,10 @@ absl::Status CopyCpuToTpu(const at::Tensor& src, const at::Tensor& dest,
   if (src.numel() == 0) {
     // Copying nothing is a no-op.
     return absl::OkStatus();
+  }
+
+  if (ShouldConvertOnHostToKeepLayout(src, dest)) {
+    return CopyCpuToTpu(src.to(dest.scalar_type()), dest, transfer_sync_mode);
   }
 
   // In the most common case of `.to("tpu")`, src and dest will be the same size
@@ -74,6 +124,22 @@ absl::Status CopyCpuToTpu(const at::Tensor& src, const at::Tensor& dest,
       !IsTpuPinnedPtr(effective_src.storage().data_ptr().get())) {
     effective_src = effective_src.pin_memory(dest.device());
   }
+
+  // The copy gives `dest` a new buffer. Unless a LayoutContext is active,
+  // create it in `dest`'s current layout, so that e.g. load_state_dict() keeps
+  // custom layouts.
+  bool dest_layout_pushed = false;
+  if (!GetContextState<LayoutContextState>().has_value()) {
+    std::optional<xla::Layout> non_default_layout = GetNonDefaultLayout(dest);
+    if (non_default_layout.has_value()) {
+      PushContextState<LayoutContextState>(
+          std::make_shared<const xla::Layout>(std::move(*non_default_layout)));
+      dest_layout_pushed = true;
+    }
+  }
+  absl::Cleanup exit_layout_context = [dest_layout_pushed] {
+    if (dest_layout_pushed) PopContextState<LayoutContextState>();
+  };
 
   TT_ASSIGN_OR_RETURN(TpuLayout tpu_layout, ResolveTpuLayout(effective_src));
 
