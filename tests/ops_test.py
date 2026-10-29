@@ -1401,6 +1401,7 @@ class TestOps(op_testing.OpInfoTestBase):
     self.set_dynamism_handlers(
         dynamism_test_utils.verify_op_supports_dynamism,
         dynamism_test_utils.mark_input_dynamic,
+        dynamism_test_utils.generate_exhaustive_input_marking_plans,
     )
     self.set_symbolic_shapes_known_failures(SYMBOLIC_SHAPES_KNOWN_FAILURES)
 
