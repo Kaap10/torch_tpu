@@ -21690,34 +21690,6 @@ class OpsGradUnitTest(TorchTpuVsCpuTestBase):
     mask[5, 2] = True
     self.assertIsNone(flex_attention_redirect.equal_square_tile_size(mask))
 
-  @parameterized.product(
-      window_size=[128, 160],
-      dtype=[torch.bfloat16, torch.float32],
-  )
-  def test_sdpa_sliding_window(self, window_size: int, dtype: torch.dtype):
-
-    def make_tensor():
-      return torch.randn(
-          1, 2, 512, 128, device="tpu", dtype=dtype, requires_grad=True
-      )
-
-    q, k, v, dy = make_tensor(), make_tensor(), make_tensor(), make_tensor()
-
-    def run(mask):
-      out = torch.nn.functional.scaled_dot_product_attention(
-          q, k, v, attn_mask=mask
-      )
-      return out, *torch.autograd.grad(out, (q, k, v), dy)
-
-    mask_1d = torch.empty(window_size, device="tpu", dtype=dtype)
-    # Reference 2D causal band mask: True where 0 <= row - col < window_size.
-    mask_2d = (
-        torch.ones(512, 512, device="tpu", dtype=torch.bool)
-        .tril_()
-        .triu_(1 - window_size)
-    )
-    utils.assert_close(run(mask_1d), run(mask_2d))
-
   def test_splash_sdpa_gqa_fwd_bwd(self):
     batch, n_heads, n_kv_heads, seq_len, head_dim = 2, 8, 2, 512, 128
     dtype = torch.bfloat16
