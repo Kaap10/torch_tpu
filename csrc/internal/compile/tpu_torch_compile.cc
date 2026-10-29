@@ -2358,6 +2358,11 @@ TT_PYBIND11_MODULE(tpu_torch_compile, m) {
         "Pops the current state of the enable_tracebacks context manager.");
   m.def("push_enable_tracebacks", &PyPushEnableTracebacks, py::arg("enabled"),
         "Pushes a new state onto the enable_tracebacks context manager.");
+  m.def("append_name_scope", &ScopedPythonContextCapturer::AppendNameScope,
+        py::arg("scope"),
+        "Appends a single name scope to the active hierarchy on top of the "
+        "PythonContext capturer stack (pushing the extended hierarchy so "
+        "pop_name_scopes restores the previous one).");
   m.def("push_name_scopes", &ScopedPythonContextCapturer::PushNameScopes,
         py::arg("scopes"),
         "Pushes a full name scope hierarchy onto the PythonContext capturer "

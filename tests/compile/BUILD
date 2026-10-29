@@ -530,6 +530,7 @@ torch_tpu_py_test(
     ],
     deps = [
         "//shims/absl_py/testing:absltest",
+        "//shims/absl_py/testing:parameterized",
         "//shims/torch:pytorch",
         "//src/torch_tpu",
         "//src/torch_tpu/_internal/compiler_options",
@@ -538,6 +539,7 @@ torch_tpu_py_test(
         "//src/torch_tpu/_internal/export",
         "//src/torch_tpu/_internal/precision",
         "//src/torch_tpu/_internal/profiler",
+        "//src/torch_tpu/_internal/profiler:named_scope",
         "//tests:seed_test_utils",
     ],
 )
