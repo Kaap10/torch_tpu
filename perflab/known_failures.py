@@ -356,40 +356,6 @@ KNOWN_FAILURES: tuple[KnownFailure, ...] = (
         ),
         reason="HBM OOM during the training warmup on v7_1x1x1",
     ),
-    KnownFailure(
-        benchmark="tapas_base_finetuned_sqa_train_gen",
-        framework=mode_lib.Framework.TORCH,
-        device_kind=target_lib.DeviceKind.TPU,
-        run_modes=frozenset(
-            {common.RunMode.EAGER_DEFAULT, common.RunMode.EAGER_OPTIMIZED}
-        ),
-        reason=(
-            "generated labels are random token ids, but TAPAS question"
-            " answering needs 0/1 cell selection labels"
-        ),
-    ),
-    KnownFailure(
-        benchmark="tapas_large_finetuned_sqa_train_gen",
-        framework=mode_lib.Framework.TORCH,
-        device_kind=target_lib.DeviceKind.TPU,
-        run_modes=frozenset(
-            {common.RunMode.EAGER_DEFAULT, common.RunMode.EAGER_OPTIMIZED}
-        ),
-        reason=(
-            "generated labels are random token ids, but TAPAS question"
-            " answering needs 0/1 cell selection labels"
-        ),
-    ),
-    KnownFailure(
-        benchmark="tapas_large_finetuned_sqa_train_gen",
-        framework=mode_lib.Framework.TORCH,
-        device_kind=target_lib.DeviceKind.CUDA,
-        run_modes=frozenset({common.RunMode.EAGER_DEFAULT}),
-        reason=(
-            "generated labels are random token ids, but TAPAS question"
-            " answering needs 0/1 cell selection labels"
-        ),
-    ),
     # TODO(b/571695076): Remove once the 4096 parameter training step compiles
     # within the subprocess timeout.
     KnownFailure(
