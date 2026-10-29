@@ -3886,7 +3886,16 @@ class TestOps(op_testing.OpInfoTestBase):
     self.do_test_op("sqrt")
 
   def test_squeeze(self):
-    self.do_test_op("squeeze")
+    self.do_test_op(
+        "squeeze",
+        # Upstream PyTorch's squeeze_(dim) passes self's own symbolic sizes and
+        # strides to as_strided_(), which frees them before copying them, so it
+        # crashes on FakeTensors with symbolic dims (on CPU too).
+        skip_if=lambda variant, _: (
+            op_testing.is_check_symbolic_shapes_mode()
+            and variant == OpVariant.INPLACE
+        ),
+    )
 
   def test_squeeze_copy(self):
     self.do_test_op("squeeze_copy")

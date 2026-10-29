@@ -5427,6 +5427,11 @@ def is_compiled_mode() -> bool:
   return _USE_COMPILED.value
 
 
+def is_check_symbolic_shapes_mode() -> bool:
+  """Returns true if --check_symbolic_shapes is set."""
+  return _CHECK_SYMBOLIC_SHAPES.value
+
+
 @functools.lru_cache(maxsize=None)
 def is_tpu_vs_gpu_compiled() -> bool:
   """Returns true if running TPU vs GPU test in compiled mode."""
