@@ -183,6 +183,7 @@ DYNAMISM_DENY_LISTS: DenyList = {
     # TODO: b/449736443 - Support bounded dimensions in these lowerings.
     "the lowering broadcasts a bounded input to a static shape": {
         "baddbmm": {EAGER},
+        "baddbmm.dtype": {EAGER},
         "bernoulli": {EAGER},
         # These abort the test process with a CHECK failure.
         "linalg.lu_solve": {EAGER},
@@ -196,6 +197,8 @@ DYNAMISM_DENY_LISTS: DenyList = {
         # _upsample_bicubic2d_aa and _upsample_bilinear2d_aa lower via 1D gathers with static output sizes.
         "_upsample_bicubic2d_aa": ALL_MODES,
         "_upsample_bilinear2d_aa": ALL_MODES,
+        # embedding_renorm_ uses static BroadcastInDim and Scatter shapes.
+        "embedding_renorm_": ALL_MODES,
         # cross_entropy_loss lowers via gather/scatter and static element count
         # queries, and requires synchronized target/weight dynamic marking.
         "nn.functional.cross_entropy": ALL_MODES,
@@ -223,22 +226,39 @@ DYNAMISM_DENY_LISTS: DenyList = {
     },
     "the op may work, but requires mark_dynamic test support": {
         # Needs matmul-style marking.
+        "_addmm_activation": ALL_MODES,
         "addmm": ALL_MODES,
+        "addmm.dtype": ALL_MODES,
         "addmv": ALL_MODES,
+        "baddbmm.dtype": {COMPILE},
         "dot": ALL_MODES,
         "native_layer_norm": ALL_MODES,  # input/weight/bias have dim dependency
+        "_weight_norm_interface": ALL_MODES,  # v and g have dim dependency
+        "_weight_norm_interface_backward": (
+            ALL_MODES
+        ),  # grad_w, saved_v, saved_g, saved_norms have dim dependency
         "lu_unpack": ALL_MODES,  # data, pivots have dim dependency
         # Can only mark the concatenated dim dynamic for cat-like ops.
         "cat": ALL_MODES,
         "stack": ALL_MODES,
+        # col2im column dimension L must match static output_size/kernel_size.
+        "col2im": ALL_MODES,
+        # Per-channel observer/fake-quant buffers must match channel axis size.
+        "_fused_moving_avg_obs_fq_helper": ALL_MODES,
+        # RNN input, hidden state, and flat weight list have coupled dimensions.
+        "gru.input": ALL_MODES,
+        "lstm.input": ALL_MODES,
         # TODO(amainz): Bounded dynamism requires synchronized scale/operand
         # dimension marking and dynamic scale reshape support.
         "torch._scaled_mm": ALL_MODES,
         # TODO(amainz): Bounded dynamism requires synchronized group offset,
         # scale, and operand dimension marking.
+        "_grouped_mm": ALL_MODES,
         "torch._scaled_grouped_mm": ALL_MODES,
-        # TODO: segment_reduce requires length/offset dimension matching under
-        # dynamism.
+        # TODO: segment_reduce and jagged ops require length/offset dimension
+        # matching under dynamism.
+        "_jagged_to_padded_dense_forward": ALL_MODES,
+        "_padded_dense_to_jagged_forward": ALL_MODES,
         "_segment_reduce": ALL_MODES,
     },
     # TODO: b/449736443 - [XLA] Crash in complex rewriter.
@@ -298,9 +318,11 @@ DYNAMISM_DENY_LISTS: DenyList = {
     },
     "untriaged: numerical mismatch": {
         "bmm": {COMPILE},  # under dynamic compile
+        "bmm.dtype": {COMPILE},  # under dynamic compile
         "conj_physical": ALL_MODES,  # identity operation for i64 and f64 fails
         "expm1": ALL_MODES,  # result differs
         "mm": {COMPILE},  # under dynamic compile
+        "mm.dtype": {COMPILE},  # under dynamic compile
         "nn.functional.hardswish": ALL_MODES,  # adjust tolerance
         "nn.functional.nll_loss": ALL_MODES,  # or failure in some shards
         "nn.functional.relu": ALL_MODES,  # tolerance
@@ -653,7 +675,10 @@ class BinaryElementwiseDynamicOpInfo(DynamicOpInfo):
     """Method to declare ops supported by this adapter."""
 
     additional_binary_ops = [
+        "__lshift__",
+        "__rshift__",
         "_log_softmax_backward_data",
+        "_masked_softmax",
         "_softmax_backward_data",
         "equal",
     ]
@@ -682,6 +707,7 @@ class TernaryElementwiseDynamicOpInfo(DynamicOpInfo):
   """A wrapper around OpInfo that supports bounded dynamism."""
 
   ternary_elementwise_ops = {
+      "_masked_softmax_backward",
       "addcdiv",
       "addcmul",
       "clamp",
@@ -808,7 +834,7 @@ class MatmulDynamicOpInfo(DynamicOpInfo):
   def adapter_supports_op(op_info: core.OpInfo):
     """Method to declare ops supported by this adapter."""
 
-    matmul_ops = ["bmm", "mm"]
+    matmul_ops = ["bmm", "bmm.dtype", "mm", "mm.dtype"]
     return op_info.name in matmul_ops
 
   def _mark_dependent_arg_dynamic(

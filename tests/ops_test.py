@@ -172,6 +172,12 @@ def update_dict(d, u):
 #   https://docs.pytorch.org/docs/stable/testing.html
 ACCURACY_OVERRIDES_VS_GPU = {
     # go/keep-sorted start
+    "_addmm_activation": {
+        torch.bfloat16: {"rtol": 1.7e-2, "atol": 1.5e-2},
+        torch.float16: {"rtol": 1.6e-1, "atol": 5.4e-1},
+        torch.float32: {"rtol": 5.5e-2, "atol": 4.3e-2},
+        torch.float64: {"rtol": 1.5e-4, "atol": 5.7e-4},
+    },
     "_foreach_acos": {
         torch.complex64: {"rtol": 5.2e-5, "atol": 6.7e-5},
     },
@@ -227,8 +233,16 @@ ACCURACY_OVERRIDES_VS_GPU = {
         torch.complex64: {"rtol": 1.4e-4, "atol": 1.1e-5},
         torch.float32: {"atol": 5.2e-5},
     },
+    "_grouped_mm": {
+        torch.float16: {"rtol": 1.1e-2, "atol": 1.2e-2},
+        torch.float32: {"rtol": 8.6e-3, "atol": 1.3e-2},
+    },
     "_log_softmax_backward_data": {
         torch.float32: {"rtol": 3.5e-5, "atol": 3.6e-5},
+    },
+    "_masked_softmax_backward": {
+        torch.bfloat16: {"atol": 3e-3},
+        torch.float16: {"atol": 5.9e-4},
     },
     "_native_batch_norm_legit": {
         torch.float32: {"rtol": 1e-5, "atol": 2.1e-5},
@@ -280,6 +294,11 @@ ACCURACY_OVERRIDES_VS_GPU = {
         torch.float16: {"rtol": 1.5e-2},
         torch.float32: {"rtol": 7.7e-3},
     },
+    "addmm.dtype": {
+        torch.bfloat16: {"atol": 6.1e-2},
+        torch.float16: {"rtol": 2.9e-2, "atol": 9.3e-2},
+        torch.float32: {"rtol": 2.8e-2, "atol": 8e-2},
+    },
     "asin": {
         torch.complex64: {"rtol": 7.9e-5, "atol": 1e-4},
     },
@@ -306,15 +325,30 @@ ACCURACY_OVERRIDES_VS_GPU = {
         torch.float16: {"rtol": 2.8e-1, "atol": 3.3e-1},
         torch.float32: {"rtol": 3.4e-1, "atol": 3.6e-1},
     },
+    "baddbmm.dtype": {
+        torch.complex64: {"rtol": 1.5e-1},
+        torch.float16: {"rtol": 6e-2, "atol": 1.2e-2},
+        torch.float32: {"rtol": 7.7e-2, "atol": 8.4e-3},
+    },
     "bmm": {
         torch.complex64: {"rtol": 9.6e-2},
         torch.float16: {"rtol": 1.1e-1, "atol": 3.5e-1},
         torch.float32: {"rtol": 6.6e-2, "atol": 3.4e-1},
     },
+    "bmm.dtype": {
+        torch.complex64: {"rtol": 3.5e-2, "atol": 2e-2},
+        torch.float16: {"rtol": 1e-1, "atol": 8.2e-2},
+        torch.float32: {"rtol": 5.4e-2, "atol": 7.4e-2},
+    },
     "cdist": {
         torch.bfloat16: {"atol": 2.1e-1},
         torch.float16: {"rtol": 2e-1, "atol": 3e-1},
         torch.float32: {"rtol": 5.1e-1, "atol": 3e-1},
+    },
+    "col2im": {
+        torch.complex64: {"rtol": 2.3e-2},
+        torch.float16: {"rtol": 2.1e-2, "atol": 4.2e-2},
+        torch.float32: {"rtol": 1.8e-2, "atol": 3.4e-2},
     },
     "cos": {
         torch.complex64: {"rtol": 4.5e-6},
@@ -377,6 +411,11 @@ ACCURACY_OVERRIDES_VS_GPU = {
     },
     "floor_divide": {
         torch.bfloat16: {"rtol": 2.1e-1},
+    },
+    "gru.input": {
+        torch.bfloat16: {"atol": 1.2e-3},
+        torch.float16: {"atol": 1.1e-3},
+        torch.float32: {"atol": 9.3e-4},
     },
     "ldexp": {
         torch.complex64: {"rtol": 4.4e-6},
@@ -467,6 +506,11 @@ ACCURACY_OVERRIDES_VS_GPU = {
         torch.int8: {"atol": 7.5e-5},
         torch.uint8: {"atol": 7.5e-5},
     },
+    "lstm.input": {
+        torch.bfloat16: {"atol": 1.2e-3},
+        torch.float16: {"atol": 3.7e-4},
+        torch.float32: {"atol": 4e-4},
+    },
     "matmul": {
         torch.bfloat16: {"rtol": 1.2e-1, "atol": 1.9e-1},
         torch.complex64: {"rtol": 1.4e-1},
@@ -477,6 +521,11 @@ ACCURACY_OVERRIDES_VS_GPU = {
         torch.complex64: {"rtol": 3.8e-2},
         torch.float16: {"rtol": 4.8e-2},
         torch.float32: {"rtol": 5.2e-2},
+    },
+    "mm.dtype": {
+        torch.complex64: {"rtol": 3.6e-2},
+        torch.float16: {"rtol": 2.9e-2, "atol": 4.2e-3},
+        torch.float32: {"rtol": 4.9e-2, "atol": 2.9e-3},
     },
     # Tolerance overrides justified for performance: native bfloat16/float16
     # pooling computations avoid costly intermediate upcasts to float32.
@@ -609,6 +658,11 @@ ACCURACY_OVERRIDES_VS_GPU = {
 # Like ACCURACY_OVERRIDES_VS_GPU, but with torch.compile().
 ACCURACY_OVERRIDES_VS_GPU_COMPILED = {
     # go/keep-sorted start
+    "_addmm_activation": {
+        torch.float16: {"rtol": 1.6e-1, "atol": 5.4e-1},
+        torch.float32: {"rtol": 5.5e-2, "atol": 4.3e-2},
+        torch.float64: {"rtol": 1.5e-4, "atol": 5.7e-4},
+    },
     "_foreach_cosh": {
         torch.complex64: {"rtol": 5.1e-6},
     },
@@ -639,8 +693,16 @@ ACCURACY_OVERRIDES_VS_GPU_COMPILED = {
     "_foreach_tanh": {
         torch.complex64: {"rtol": 1.4e-4, "atol": 1.1e-5},
     },
+    "_grouped_mm": {
+        torch.float16: {"rtol": 1.1e-2, "atol": 1.2e-2},
+        torch.float32: {"rtol": 8.6e-3, "atol": 1.3e-2},
+    },
     "_log_softmax_backward_data": {
         torch.float32: {"rtol": 3.5e-5, "atol": 3.6e-5},
+    },
+    "_masked_softmax_backward": {
+        torch.bfloat16: {"atol": 3e-3},
+        torch.float16: {"atol": 5.9e-4},
     },
     "_native_batch_norm_legit": {
         torch.float32: {"rtol": 1e-5, "atol": 2.1e-5},
@@ -679,6 +741,10 @@ ACCURACY_OVERRIDES_VS_GPU_COMPILED = {
             "atol": 1.0e-3,  # TOLERANCE_OVERRIDE_OK
         },
     },
+    "addmm.dtype": {
+        torch.float16: {"rtol": 2.9e-2, "atol": 9.7e-2},
+        torch.float32: {"rtol": 2.8e-2, "atol": 8e-2},
+    },
     "asin": {
         torch.complex64: {"rtol": 7.9e-5, "atol": 1e-4},
     },
@@ -702,10 +768,25 @@ ACCURACY_OVERRIDES_VS_GPU_COMPILED = {
     "baddbmm": {
         torch.complex64: {"rtol": 6.9e-2},
     },
+    "baddbmm.dtype": {
+        torch.complex64: {"rtol": 8.2e-2},
+        torch.float16: {"rtol": 3.9e-2, "atol": 1.2e-2},
+        torch.float32: {"rtol": 3e-2, "atol": 8.4e-3},
+    },
     "bmm": {
         torch.complex64: {"rtol": 9.6e-2},
         torch.float16: {"rtol": 1.1e-1, "atol": 3.5e-1},
         torch.float32: {"rtol": 6.6e-2, "atol": 3.4e-1},
+    },
+    "bmm.dtype": {
+        torch.complex64: {"rtol": 3.5e-2, "atol": 2e-2},
+        torch.float16: {"rtol": 1e-1, "atol": 8.2e-2},
+        torch.float32: {"rtol": 5.4e-2, "atol": 7.4e-2},
+    },
+    "col2im": {
+        torch.complex64: {"rtol": 2.3e-2},
+        torch.float16: {"rtol": 2.1e-2, "atol": 4.2e-2},
+        torch.float32: {"rtol": 1.8e-2, "atol": 3.4e-2},
     },
     "cos": {
         torch.complex64: {"rtol": 4.5e-6},
@@ -741,6 +822,11 @@ ACCURACY_OVERRIDES_VS_GPU_COMPILED = {
         torch.int64: {"rtol": 4.4e-6, "atol": 7.9e-7},
         torch.int8: {"rtol": 4.4e-6, "atol": 7.9e-7},
         torch.uint8: {"rtol": 4.4e-6},
+    },
+    "gru.input": {
+        torch.bfloat16: {"atol": 1.2e-3},
+        torch.float16: {"atol": 1.1e-3},
+        torch.float32: {"atol": 9.3e-4},
     },
     "ldexp": {
         torch.complex64: {"rtol": 4.4e-6},
@@ -789,11 +875,21 @@ ACCURACY_OVERRIDES_VS_GPU_COMPILED = {
         torch.int8: {"atol": 7.5e-5},
         torch.uint8: {"atol": 7.5e-5},
     },
+    "lstm.input": {
+        torch.bfloat16: {"atol": 1.2e-3},
+        torch.float16: {"atol": 3.7e-4},
+        torch.float32: {"atol": 4e-4},
+    },
     "matmul": {
         torch.complex64: {"rtol": 5.2e-2},
     },
     "mm": {
         torch.complex64: {"rtol": 3.8e-2},
+    },
+    "mm.dtype": {
+        torch.complex64: {"rtol": 3.6e-2},
+        torch.float16: {"rtol": 2.9e-2, "atol": 4.2e-3},
+        torch.float32: {"rtol": 4.9e-2, "atol": 2.9e-3},
     },
     # Tolerance overrides justified for performance: native bfloat16/float16
     # pooling computations avoid costly intermediate upcasts to float32.
@@ -966,6 +1062,11 @@ ACCURACY_OVERRIDES_GRAD_VS_GPU: dict[
         "fmin": {
             torch.bfloat16: {"atol": 6e-1},
         },
+        "gru.input": {
+            torch.bfloat16: {"atol": 9.4e-3},
+            torch.float16: {"rtol": 4.3e-3, "atol": 5e-3},
+            torch.float32: {"rtol": 5.3e-3, "atol": 4.9e-3},
+        },
         "kron": {
             torch.float16: {"rtol": 2.8e-3, "atol": 6.3e-2},
         },
@@ -1022,6 +1123,11 @@ ACCURACY_OVERRIDES_GRAD_VS_GPU: dict[
             torch.bfloat16: {"rtol": 7.3e-2, "atol": 3.3e-2},
             torch.float16: {"rtol": 9.4e-3, "atol": 4.7e-3},
             torch.float32: {"rtol": 1.4e-4, "atol": 6.5e-5},
+        },
+        "lstm.input": {
+            torch.bfloat16: {"atol": 4.7e-3},
+            torch.float16: {"rtol": 3.4e-3, "atol": 4.2e-3},
+            torch.float32: {"rtol": 2.9e-3, "atol": 4e-3},
         },
         "native_batch_norm": {
             torch.bfloat16: {"atol": 1.1e-2},
@@ -1379,6 +1485,26 @@ class TestOps(op_testing.OpInfoTestBase):
         ),
     )
 
+  def test_addmm_activation(self):
+    self.do_test_op(
+        "_addmm_activation",
+        # _addmm_activation only supports floating-point dtypes on GPU and TPU.
+        exclude_dtypes=COMPLEX_DTYPES + INTEGRAL_DTYPES,
+        # _addmm_activation is an inference/lowering fusion without an autograd
+        # backward formula in PyTorch.
+        check_grad=False,
+    )
+
+  def test_addmm_dtype(self):
+    self.do_test_op(
+        "addmm.dtype",
+        # TorchTPU's addmm.dtype kernel does not yet support complex or integral
+        # dtypes.
+        exclude_dtypes=COMPLEX_DTYPES + INTEGRAL_DTYPES,
+        # ATen's addmm.dtype overload does not register an autograd derivative.
+        check_grad=False,
+    )
+
   def test_addmv(self):
     self.do_test_op(
         "addmv",
@@ -1528,6 +1654,24 @@ class TestOps(op_testing.OpInfoTestBase):
         ),
     )
 
+  def test_baddbmm_dtype(self):
+    self.do_test_op(
+        "baddbmm.dtype",
+        # CUDA cublas does not support integral or boolean dtypes for
+        # baddbmm.dtype, whereas TorchTPU lowers them via DotGeneral.
+        exclude_dtypes=INTEGRAL_DTYPES + (torch.bool,),
+        # ATen's baddbmm.dtype overload does not register an autograd
+        # derivative.
+        check_grad=False,
+        # In torch.compile mode, baddbmm.dtype_out with beta=1 aliases self and
+        # out in AOTAutograd functionalization and raises a RuntimeError.
+        skip_if=lambda variant, op_input: (
+            op_testing.is_compiled_mode()
+            and variant == OpVariant.OUT
+            and op_input.kwargs.get("beta") == 1
+        ),
+    )
+
   def test_bernoulli(self):
     self.do_test_op(
         "bernoulli",
@@ -1599,6 +1743,16 @@ class TestOps(op_testing.OpInfoTestBase):
         ),
     )
 
+  def test_bmm_dtype(self):
+    self.do_test_op(
+        "bmm.dtype",
+        # CUDA cublas does not support integral or boolean dtypes for bmm.dtype,
+        # whereas TorchTPU lowers them via DotGeneral.
+        exclude_dtypes=INTEGRAL_DTYPES + (torch.bool,),
+        # ATen's bmm.dtype overload does not register an autograd derivative.
+        check_grad=False,
+    )
+
   def test_cat(self):
     self.do_test_op(
         "cat",
@@ -1656,6 +1810,16 @@ class TestOps(op_testing.OpInfoTestBase):
 
   def test_clone(self):
     self.do_test_op("clone")
+
+  def test_col2im(self):
+    self.do_test_op(
+        "col2im",
+        # CUDA does not support integral or boolean dtypes for col2im, and
+        # TorchTPU does not yet support complex128.
+        exclude_dtypes=(torch.complex128, torch.bool) + INTEGRAL_DTYPES,
+        # col2im.out is not registered on the TorchTPU backend.
+        check_out_variant=False,
+    )
 
   def test_complex(self):
     self.do_test_op(
@@ -1807,6 +1971,17 @@ class TestOps(op_testing.OpInfoTestBase):
         ),
     )
 
+  def test_embedding_renorm_(self):
+    self.do_test_op(
+        "embedding_renorm_",
+        # embedding_renorm_ only supports floating-point weights on GPU and TPU.
+        exclude_dtypes=COMPLEX_DTYPES + INTEGRAL_DTYPES + (torch.bool,),
+        exclude_inplace_dtypes=COMPLEX_DTYPES + INTEGRAL_DTYPES + (torch.bool,),
+        # embedding_renorm_ is an in-place weight renormalization utility and is
+        # non-differentiable.
+        check_grad=False,
+    )
+
   def test_empty(self):
     self.do_test_op(
         "empty",
@@ -1861,6 +2036,17 @@ class TestOps(op_testing.OpInfoTestBase):
 
   def test_eye(self):
     self.do_test_op("eye")
+
+  def test_fake_quantize_per_tensor_affine_cachemask(self):
+    self.do_test_op(
+        "fake_quantize_per_tensor_affine_cachemask",
+        # fake_quantize_per_tensor_affine_cachemask only supports floating-point
+        # inputs on GPU and TPU.
+        exclude_dtypes=COMPLEX_DTYPES + INTEGRAL_DTYPES + (torch.bool,),
+        # Internal helper op returning (output, mask); autograd is defined on
+        # the higher-level fake_quantize_per_tensor_affine op.
+        check_grad=False,
+    )
 
   def test_fft_rfft(self):
     self.do_test_op(
@@ -2335,6 +2521,19 @@ class TestOps(op_testing.OpInfoTestBase):
         check_grad=False,
     )
 
+  def test_fused_moving_avg_obs_fq_helper(self):
+    self.do_test_op(
+        "_fused_moving_avg_obs_fq_helper",
+        # CUDA only implements _fused_moving_avg_obs_fq_helper for float32;
+        # TorchTPU supports float32/bfloat16/float16 and rejects float64,
+        # complex, integral, and boolean dtypes.
+        exclude_dtypes=(
+            (torch.float16, torch.bfloat16, torch.float64)
+            + COMPLEX_DTYPES
+            + INTEGRAL_DTYPES
+        ),
+    )
+
   def test_fused_sgd(self):
     self.do_test_op(
         "_fused_sgd_",
@@ -2389,6 +2588,25 @@ class TestOps(op_testing.OpInfoTestBase):
             and op_testing._COMPUTE_GRAD.value
             else None
         ),
+    )
+
+  def test_grouped_mm(self):
+    self.do_test_op(
+        "_grouped_mm",
+        # _grouped_mm only supports floating-point dtypes and does not support
+        # float64 on GPU or TPU.
+        exclude_dtypes=(torch.float64, torch.bool)
+        + COMPLEX_DTYPES
+        + INTEGRAL_DTYPES,
+        # _grouped_mm does not define an autograd backward formula in PyTorch.
+        check_grad=False,
+    )
+
+  def test_gru_input(self):
+    self.do_test_op(
+        "gru.input",
+        # gru.input only supports floating-point dtypes on GPU and TPU.
+        exclude_dtypes=COMPLEX_DTYPES + INTEGRAL_DTYPES + (torch.bool,),
     )
 
   def test_histc(self):
@@ -2495,6 +2713,20 @@ class TestOps(op_testing.OpInfoTestBase):
 
   def test_isposinf(self):
     self.do_test_op("isposinf")
+
+  def test_jagged_to_padded_dense_forward(self):
+    self.do_test_op(
+        "_jagged_to_padded_dense_forward",
+        # CUDA does not implement _jagged_to_padded_dense_forward for complex
+        # dtypes, and upstream PyTorch lacks a Meta kernel for torch.compile.
+        exclude_dtypes=COMPLEX_DTYPES
+        + _if_tpu_vs_gpu_compiled(
+            UNQUANTIZED_NUMERIC_DTYPES + (torch.bool,), ()
+        ),
+        # Forward-only primitive; autograd is handled by higher-level nested
+        # tensor ops.
+        check_grad=False,
+    )
 
   def test_kron(self):
     self.do_test_op(
@@ -2744,6 +2976,23 @@ class TestOps(op_testing.OpInfoTestBase):
   def test_logical_not(self):
     self.do_test_op("logical_not")
 
+  def test_lshift(self):
+    self.do_test_op(
+        "__lshift__",
+        # Bitwise left shift only supports integral dtypes (excluding bool).
+        exclude_dtypes=FLOAT_DTYPES + COMPLEX_DTYPES + (torch.bool,),
+        exclude_inplace_dtypes=FLOAT_DTYPES + COMPLEX_DTYPES + (torch.bool,),
+        # Integral bitshift is non-differentiable.
+        check_grad=False,
+    )
+
+  def test_lstm_input(self):
+    self.do_test_op(
+        "lstm.input",
+        # lstm.input only supports floating-point dtypes on GPU and TPU.
+        exclude_dtypes=COMPLEX_DTYPES + INTEGRAL_DTYPES + (torch.bool,),
+    )
+
   def test_masked_scatter(self):
     self.do_test_op("masked_scatter")
 
@@ -2752,6 +3001,23 @@ class TestOps(op_testing.OpInfoTestBase):
 
   def test_masked_fill(self):
     self.do_test_op("masked_fill")
+
+  def test_masked_softmax(self):
+    self.do_test_op(
+        "_masked_softmax",
+        # _masked_softmax only supports floating-point dtypes on GPU and TPU.
+        exclude_dtypes=COMPLEX_DTYPES + INTEGRAL_DTYPES,
+    )
+
+  def test_masked_softmax_backward(self):
+    self.do_test_op(
+        "_masked_softmax_backward",
+        # _masked_softmax_backward only supports floating-point dtypes on GPU
+        # and TPU.
+        exclude_dtypes=COMPLEX_DTYPES + INTEGRAL_DTYPES,
+        # Backward primitive without a second-order autograd formula.
+        check_grad=False,
+    )
 
   def test_matmul(self):
     self.do_test_op(
@@ -2870,6 +3136,16 @@ class TestOps(op_testing.OpInfoTestBase):
         ),
     )
 
+  def test_mm_dtype(self):
+    self.do_test_op(
+        "mm.dtype",
+        # CUDA cublas does not support integral or boolean dtypes for mm.dtype,
+        # whereas TorchTPU lowers them via DotGeneral.
+        exclude_dtypes=INTEGRAL_DTYPES + (torch.bool,),
+        # ATen's mm.dtype overload does not register an autograd derivative.
+        check_grad=False,
+    )
+
   def test_mul(self):
     self.do_test_op("mul")
 
@@ -2979,6 +3255,20 @@ class TestOps(op_testing.OpInfoTestBase):
 
   def test_ones_like(self):
     self.do_test_op("ones_like")
+
+  def test_padded_dense_to_jagged_forward(self):
+    self.do_test_op(
+        "_padded_dense_to_jagged_forward",
+        # CUDA only implements float/bfloat16/half and int64 for
+        # _padded_dense_to_jagged_forward, and upstream PyTorch lacks a Meta
+        # kernel for torch.compile.
+        exclude_dtypes=COMPLEX_DTYPES
+        + (torch.uint8, torch.int8, torch.int16, torch.int32, torch.bool)
+        + _if_tpu_vs_gpu_compiled(UNQUANTIZED_NUMERIC_DTYPES, ()),
+        # Forward-only primitive; autograd is handled by higher-level nested
+        # tensor ops.
+        check_grad=False,
+    )
 
   def test_permute(self):
     self.do_test_op("permute")
@@ -3282,6 +3572,16 @@ class TestOps(op_testing.OpInfoTestBase):
 
   def test_rsqrt(self):
     self.do_test_op("rsqrt")
+
+  def test_rshift(self):
+    self.do_test_op(
+        "__rshift__",
+        # Bitwise right shift only supports integral dtypes (excluding bool).
+        exclude_dtypes=FLOAT_DTYPES + COMPLEX_DTYPES + (torch.bool,),
+        exclude_inplace_dtypes=FLOAT_DTYPES + COMPLEX_DTYPES + (torch.bool,),
+        # Integral bitshift is non-differentiable.
+        check_grad=False,
+    )
 
   def test_rsub(self):
     self.do_test_op("rsub")
@@ -3852,6 +4152,24 @@ class TestOps(op_testing.OpInfoTestBase):
             torch.float16,
             torch.float64,
         ),
+    )
+
+  def test_weight_norm_interface(self):
+    self.do_test_op(
+        "_weight_norm_interface",
+        # _weight_norm_interface only supports floating-point dtypes on GPU and
+        # TPU.
+        exclude_dtypes=COMPLEX_DTYPES + INTEGRAL_DTYPES,
+    )
+
+  def test_weight_norm_interface_backward(self):
+    self.do_test_op(
+        "_weight_norm_interface_backward",
+        # _weight_norm_interface_backward only supports floating-point dtypes on
+        # GPU and TPU.
+        exclude_dtypes=COMPLEX_DTYPES + INTEGRAL_DTYPES,
+        # Backward primitive without a second-order autograd formula.
+        check_grad=False,
     )
 
   def test_where(self):

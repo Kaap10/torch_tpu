@@ -355,14 +355,21 @@ def find_cast_pairs(
 # out-kernels are updated with proper ATen type checking.
 _OUT_DTYPE_CAST_KNOWN_FAILURES: Final[set[str]] = {
     # go/keep-sorted start
+    "_addmm_activation",
+    "_masked_softmax",
+    "_masked_softmax_backward",
     "addcdiv",
     "addcmul",
+    "addmm.dtype",
     "addmv",
+    "baddbmm.dtype",
     "bitwise_not",
+    "bmm.dtype",
     # TODO: Remove "histc" once find_cast_pairs avoids real->complex pairs.
     "histc",
     "index_reduce",
     "lerp",
+    "mm.dtype",
     "sparse_coo_mul",
     "sparse_coo_neg",
     # TODO: Remove "std" once find_cast_pairs avoids real->complex pairs.
@@ -2729,6 +2736,1206 @@ def _sample_inputs_sparse_coo_copy_(
   )
 
 
+def _make_analytic_tensor(
+    shape: Sequence[int],
+    *,
+    device: str | torch.device,
+    dtype: torch.dtype,
+    low: float = -1.0,
+    high: float = 1.0,
+    offset: int = 0,
+    requires_grad: bool = False,
+) -> torch.Tensor:
+  """Creates a deterministic tensor analytically without calling PyTorch RNG."""
+  numel = 1
+  for d in shape:
+    numel *= d
+  if dtype in quantize_utils.SUB_BYTE_DTYPES:
+    return torch.zeros(shape, dtype=torch.uint8, device=device).view(dtype)
+  if dtype == torch.bool:
+    vals = (
+        torch.arange(numel, device=device, dtype=torch.int64) + offset
+    ) % 2 == 0
+    return vals.reshape(shape)
+  if dtype.is_floating_point:
+    compute_dtype = torch.float64 if dtype == torch.float64 else torch.float32
+    base = torch.linspace(
+        low + 0.05 * offset,
+        high - 0.03 * offset,
+        steps=max(numel, 1),
+        device=device,
+        dtype=compute_dtype,
+    )[:numel]
+    if numel > 1 and offset > 0:
+      base = torch.roll(base, shifts=(offset * 3) % numel)
+    out = base.reshape(shape).to(dtype)
+    if requires_grad and dtype in (
+        torch.float16,
+        torch.bfloat16,
+        torch.float32,
+        torch.float64,
+    ):
+      out.requires_grad_(True)
+    return out
+  if dtype.is_complex:
+    real_dtype = torch.float64 if dtype == torch.complex128 else torch.float32
+    real = _make_analytic_tensor(
+        shape,
+        device=device,
+        dtype=real_dtype,
+        low=low,
+        high=high,
+        offset=offset,
+    )
+    imag = _make_analytic_tensor(
+        shape,
+        device=device,
+        dtype=real_dtype,
+        low=low,
+        high=high,
+        offset=offset + 1,
+    )
+    out = torch.complex(real, imag).to(dtype)
+    if requires_grad:
+      out.requires_grad_(True)
+    return out
+  span = max(int(high - low), 1)
+  vals = int(low) + (
+      (torch.arange(numel, device=device, dtype=torch.int64) + offset) % span
+  )
+  return vals.reshape(shape).to(dtype)
+
+
+def _sample_inputs_addmm_activation(
+    op_info: OpInfo,
+    device: torch.device,
+    dtype: torch.dtype,
+    requires_grad: bool,
+    **kwargs: Any,
+) -> Iterable[SampleInput]:
+  """Deterministic sample inputs generator for _addmm_activation."""
+  del op_info, kwargs
+  make_arg = functools.partial(
+      _make_analytic_tensor,
+      device=device,
+      dtype=dtype,
+      requires_grad=requires_grad,
+  )
+  m, k, n = 4, 6, 8
+  if dtype not in (
+      torch.float16,
+      torch.bfloat16,
+      torch.float32,
+      torch.float64,
+  ):
+    yield SampleInput(
+        make_arg((m, n), offset=0),
+        args=(make_arg((m, k), offset=1), make_arg((k, n), offset=2)),
+        kwargs={"beta": 1.0, "alpha": 1.0, "use_gelu": False},
+        name="unsupported_dtype",
+    )
+    return
+  yield SampleInput(
+      make_arg((m, n), offset=0),
+      args=(make_arg((m, k), offset=1), make_arg((k, n), offset=2)),
+      kwargs={"beta": 1.0, "alpha": 1.0, "use_gelu": False},
+      name="relu_2d_bias",
+  )
+  yield SampleInput(
+      make_arg((m, n), offset=3),
+      args=(make_arg((m, k), offset=4), make_arg((k, n), offset=5)),
+      kwargs={"beta": 1.0, "alpha": 1.0, "use_gelu": True},
+      name="gelu_2d_bias",
+  )
+  yield SampleInput(
+      make_arg((n,), offset=6),
+      args=(make_arg((m, k), offset=7), make_arg((k, n), offset=8)),
+      kwargs={"beta": 0.5, "alpha": 2.0, "use_gelu": False},
+      name="relu_1d_bias_scaled",
+  )
+  yield SampleInput(
+      make_arg((m, n), offset=9),
+      args=(make_arg((m, k), offset=10), make_arg((k, n), offset=11)),
+      kwargs={"beta": 0.0, "alpha": 1.0, "use_gelu": True},
+      name="gelu_zero_beta",
+  )
+
+
+def _sample_inputs_col2im(
+    op_info: OpInfo,
+    device: torch.device,
+    dtype: torch.dtype,
+    requires_grad: bool,
+    **kwargs: Any,
+) -> Iterable[SampleInput]:
+  """Deterministic sample inputs generator for col2im."""
+  del op_info, kwargs
+  make_arg = functools.partial(
+      _make_analytic_tensor,
+      device=device,
+      dtype=dtype,
+      requires_grad=requires_grad,
+  )
+  if dtype not in (
+      torch.float16,
+      torch.bfloat16,
+      torch.float32,
+      torch.float64,
+      torch.complex64,
+      torch.complex128,
+  ):
+    yield SampleInput(
+        make_arg((2, 8, 4), offset=0),
+        args=([4, 4], [2, 2], [1, 1], [0, 0], [2, 2]),
+        name="unsupported_dtype",
+    )
+    return
+  # 3D batched input: (N=2, C*kH*kW=2*2*2=8, L=2*2=4) -> output (2, 2, 4, 4)
+  yield SampleInput(
+      make_arg((2, 8, 4), offset=0),
+      args=([4, 4], [2, 2], [1, 1], [0, 0], [2, 2]),
+      name="batched_3d_stride2",
+  )
+  # 3D batched with padding=1, stride=1: (N=2, C*kH*kW=2*3*3=18, L=4*4=16)
+  yield SampleInput(
+      make_arg((2, 18, 16), offset=1),
+      args=([4, 4], [3, 3], [1, 1], [1, 1], [1, 1]),
+      name="batched_3d_pad1_stride1",
+  )
+
+
+def _sample_inputs_grouped_mm(
+    op_info: OpInfo,
+    device: torch.device,
+    dtype: torch.dtype,
+    requires_grad: bool,
+    **kwargs: Any,
+) -> Iterable[SampleInput]:
+  """Deterministic sample inputs generator for _grouped_mm."""
+  del op_info, kwargs
+  make_arg = functools.partial(
+      _make_analytic_tensor,
+      device=device,
+      dtype=dtype,
+      low=-1.0,
+      high=1.0,
+      requires_grad=requires_grad,
+  )
+  offs = torch.tensor([16, 32], device=device, dtype=torch.int32)
+  if dtype not in (
+      torch.float16,
+      torch.bfloat16,
+      torch.float32,
+      torch.float64,
+  ):
+    yield SampleInput(
+        make_arg((32, 16), offset=0),
+        args=(make_arg((2, 16, 16), offset=1),),
+        kwargs={"offs": offs},
+        name="unsupported_dtype",
+    )
+    return
+  # 2D x 3D: [sum_m, k] x [g, k, n] -> [sum_m, n]
+  yield SampleInput(
+      make_arg((32, 16), offset=0),
+      args=(make_arg((2, 16, 16), offset=1),),
+      kwargs={"offs": offs},
+      name="2d_3d_with_offs",
+  )
+  # 3D x 2D: [g, m, k] x [k, sum_n] -> [m, sum_n]
+  yield SampleInput(
+      make_arg((2, 16, 16), offset=2),
+      args=(make_arg((16, 32), offset=3),),
+      kwargs={"offs": offs},
+      name="3d_2d_with_offs",
+  )
+  # 2D x 2D: [m, sum_k] x [sum_k, n] -> [g, m, n]
+  yield SampleInput(
+      make_arg((16, 32), offset=4),
+      args=(make_arg((32, 16), offset=5),),
+      kwargs={"offs": offs},
+      name="2d_2d_with_offs",
+  )
+  # 3D x 3D: [g, m, k] x [g, k, n] -> [g, m, n], offs=None
+  yield SampleInput(
+      make_arg((2, 16, 16), offset=6),
+      args=(make_arg((2, 16, 32), offset=7),),
+      name="3d_3d_no_offs",
+  )
+
+
+def _sample_inputs_fake_quantize_per_tensor_affine_cachemask(
+    op_info: OpInfo,
+    device: torch.device,
+    dtype: torch.dtype,
+    requires_grad: bool,
+    **kwargs: Any,
+) -> Iterable[SampleInput]:
+  """Deterministic sample inputs generator for fake_quantize_per_tensor_affine_cachemask."""
+  del op_info, requires_grad, kwargs
+  if dtype not in (
+      torch.float16,
+      torch.bfloat16,
+      torch.float32,
+      torch.float64,
+  ):
+    yield SampleInput(
+        _make_analytic_tensor((2, 4), device=device, dtype=dtype),
+        args=(0.5, 0, -128, 127),
+        name="unsupported_dtype",
+    )
+    return
+  x = torch.tensor(
+      [[-3.2, -1.1, 0.2, 1.3], [2.4, 3.8, -0.7, 0.8]],
+      device=device,
+      dtype=dtype,
+  )
+  yield SampleInput(
+      x,
+      args=(0.5, 0, -128, 127),
+      name="signed_int8_range",
+  )
+  yield SampleInput(
+      x.clone(),
+      args=(0.25, 2, 0, 255),
+      name="unsigned_uint8_range",
+  )
+
+
+def _fused_moving_avg_obs_fq_helper_wrapper(
+    self: torch.Tensor,
+    observer_on: torch.Tensor,
+    fake_quant_on: torch.Tensor,
+    running_min: torch.Tensor,
+    running_max: torch.Tensor,
+    scale: torch.Tensor,
+    zero_point: torch.Tensor,
+    averaging_const: float,
+    quant_min: int,
+    quant_max: int,
+    ch_axis: int,
+    per_row_fq: bool = False,
+    symmetric_quant: bool = False,
+):
+  """Functional wrapper for torch._fused_moving_avg_obs_fq_helper."""
+  running_min_c = running_min.clone()
+  running_max_c = running_max.clone()
+  scale_c = scale.clone()
+  zero_point_c = zero_point.clone()
+  out, mask = torch._fused_moving_avg_obs_fq_helper(
+      self,
+      observer_on,
+      fake_quant_on,
+      running_min_c,
+      running_max_c,
+      scale_c,
+      zero_point_c,
+      averaging_const,
+      quant_min,
+      quant_max,
+      ch_axis,
+      per_row_fq,
+      symmetric_quant,
+  )
+  return out, mask, running_min_c, running_max_c, scale_c, zero_point_c
+
+
+def _sample_inputs_fused_moving_avg_obs_fq_helper(
+    op_info: OpInfo,
+    device: torch.device,
+    dtype: torch.dtype,
+    requires_grad: bool,
+    **kwargs: Any,
+) -> Iterable[SampleInput]:
+  """Deterministic sample inputs generator for _fused_moving_avg_obs_fq_helper."""
+  del op_info, kwargs
+  obs_on = torch.tensor([1], device=device, dtype=torch.int64)
+  fq_on = torch.tensor([1], device=device, dtype=torch.int64)
+  if dtype != torch.float32:
+    yield SampleInput(
+        _make_analytic_tensor(
+            (2, 4), device=device, dtype=dtype, requires_grad=requires_grad
+        ),
+        args=(
+            obs_on,
+            fq_on,
+            torch.tensor([-1.0], device=device, dtype=torch.float32),
+            torch.tensor([1.0], device=device, dtype=torch.float32),
+            torch.tensor([0.1], device=device, dtype=torch.float32),
+            torch.tensor([0], device=device, dtype=torch.int32),
+            0.01,
+            0,
+            255,
+            -1,
+            False,
+            False,
+        ),
+        name="unsupported_dtype",
+    )
+    return
+  x = torch.tensor(
+      [[-2.1, -0.8, 0.3, 1.4], [0.7, 2.3, -1.6, 0.9]],
+      device=device,
+      dtype=dtype,
+      requires_grad=requires_grad,
+  )
+  # Per-tensor asymmetric
+  yield SampleInput(
+      x,
+      args=(
+          obs_on,
+          fq_on,
+          torch.tensor([-1.0], device=device, dtype=torch.float32),
+          torch.tensor([1.0], device=device, dtype=torch.float32),
+          torch.tensor([0.1], device=device, dtype=torch.float32),
+          torch.tensor([0], device=device, dtype=torch.int32),
+          0.01,
+          0,
+          255,
+          -1,
+          False,
+          False,
+      ),
+      name="per_tensor_asymmetric",
+  )
+  # Per-tensor symmetric
+  yield SampleInput(
+      x.detach().clone().requires_grad_(requires_grad),
+      args=(
+          obs_on.clone(),
+          fq_on.clone(),
+          torch.tensor([-1.0], device=device, dtype=torch.float32),
+          torch.tensor([1.0], device=device, dtype=torch.float32),
+          torch.tensor([0.1], device=device, dtype=torch.float32),
+          torch.tensor([0], device=device, dtype=torch.int32),
+          0.01,
+          -128,
+          127,
+          -1,
+          False,
+          True,
+      ),
+      name="per_tensor_symmetric",
+  )
+  # Per-channel (ch_axis=0)
+  yield SampleInput(
+      x.detach().clone().requires_grad_(requires_grad),
+      args=(
+          obs_on.clone(),
+          fq_on.clone(),
+          torch.tensor([-1.0, -0.5], device=device, dtype=torch.float32),
+          torch.tensor([1.0, 1.5], device=device, dtype=torch.float32),
+          torch.tensor([0.1, 0.1], device=device, dtype=torch.float32),
+          torch.tensor([0, 0], device=device, dtype=torch.int32),
+          0.01,
+          0,
+          255,
+          0,
+          True,
+          False,
+      ),
+      name="per_channel_axis0",
+  )
+
+
+def _sample_inputs_masked_softmax(
+    op_info: OpInfo,
+    device: torch.device,
+    dtype: torch.dtype,
+    requires_grad: bool,
+    **kwargs: Any,
+) -> Iterable[SampleInput]:
+  """Deterministic sample inputs generator for _masked_softmax."""
+  del op_info, kwargs
+  make_arg = functools.partial(
+      _make_analytic_tensor,
+      device=device,
+      dtype=dtype,
+      low=-2.0,
+      high=2.0,
+      requires_grad=requires_grad,
+  )
+  b, h, l, s = 2, 2, 4, 4
+  mask_2d = torch.tensor(
+      [
+          [False, False, True, False],
+          [False, True, False, False],
+          [True, False, False, False],
+          [False, False, False, True],
+      ],
+      device=device,
+      dtype=torch.bool,
+  )
+  mask_4d = mask_2d.unsqueeze(0).unsqueeze(0).expand(b, h, l, s).contiguous()
+  if dtype not in (
+      torch.float16,
+      torch.bfloat16,
+      torch.float32,
+      torch.float64,
+  ):
+    yield SampleInput(
+        make_arg((b, h, l, s), offset=0),
+        args=(mask_4d,),
+        kwargs={"dim": -1, "mask_type": 2},
+        name="unsupported_dtype",
+    )
+    return
+  # 4D input with 4D mask (mask_type=2: mask shape == self shape)
+  yield SampleInput(
+      make_arg((b, h, l, s), offset=0),
+      args=(mask_4d,),
+      kwargs={"dim": -1, "mask_type": 2},
+      name="4d_mask_type2",
+  )
+  # 2D input with 2D mask (mask_type=2: mask shape == self shape)
+  yield SampleInput(
+      make_arg((l, s), offset=1),
+      args=(mask_2d,),
+      kwargs={"dim": 1, "mask_type": 2},
+      name="2d_mask_type2",
+  )
+
+
+def _sample_inputs_masked_softmax_backward(
+    op_info: OpInfo,
+    device: torch.device,
+    dtype: torch.dtype,
+    requires_grad: bool,
+    **kwargs: Any,
+) -> Iterable[SampleInput]:
+  """Deterministic sample inputs generator for _masked_softmax_backward."""
+  del op_info, requires_grad, kwargs
+  make_arg = functools.partial(
+      _make_analytic_tensor,
+      device=device,
+      dtype=dtype,
+      low=-1.0,
+      high=1.0,
+  )
+  b, h, l, s = 2, 2, 4, 4
+  mask_2d = torch.tensor(
+      [
+          [False, False, True, False],
+          [False, True, False, False],
+          [True, False, False, False],
+          [False, False, False, True],
+      ],
+      device=device,
+      dtype=torch.bool,
+  )
+  mask_4d = mask_2d.unsqueeze(0).unsqueeze(0).expand(b, h, l, s).contiguous()
+  if dtype not in (
+      torch.float16,
+      torch.bfloat16,
+      torch.float32,
+      torch.float64,
+  ):
+    yield SampleInput(
+        make_arg((b, h, l, s), offset=0),
+        args=(make_arg((b, h, l, s), offset=1), mask_4d),
+        kwargs={"dim": -1},
+        name="unsupported_dtype",
+    )
+    return
+  yield SampleInput(
+      make_arg((b, h, l, s), offset=0),
+      args=(
+          make_arg((b, h, l, s), offset=1).masked_fill(mask_4d, 0.0),
+          mask_4d,
+      ),
+      kwargs={"dim": -1},
+      name="4d_dim_neg1",
+  )
+  yield SampleInput(
+      make_arg((l, s), offset=2),
+      args=(make_arg((l, s), offset=3).masked_fill(mask_2d, 0.0), mask_2d),
+      kwargs={"dim": 1},
+      name="2d_dim1",
+  )
+
+
+def _sample_inputs_weight_norm_interface(
+    op_info: OpInfo,
+    device: torch.device,
+    dtype: torch.dtype,
+    requires_grad: bool,
+    **kwargs: Any,
+) -> Iterable[SampleInput]:
+  """Deterministic sample inputs generator for _weight_norm_interface."""
+  del op_info, kwargs
+  make_arg = functools.partial(
+      _make_analytic_tensor,
+      device=device,
+      dtype=dtype,
+      low=0.5,
+      high=2.0,
+      requires_grad=requires_grad,
+  )
+  if dtype not in (
+      torch.float16,
+      torch.bfloat16,
+      torch.float32,
+      torch.float64,
+  ):
+    yield SampleInput(
+        make_arg((4, 6), offset=0),
+        args=(make_arg((4, 1), offset=1), 0),
+        name="unsupported_dtype",
+    )
+    return
+  # dim=0: v has shape (4, 6), g has shape (4, 1)
+  yield SampleInput(
+      make_arg((4, 6), offset=0),
+      args=(make_arg((4, 1), offset=1), 0),
+      name="dim0",
+  )
+  # dim=1 (last dim): v has shape (4, 6), g has shape (1, 6)
+  yield SampleInput(
+      make_arg((4, 6), offset=2),
+      args=(make_arg((1, 6), offset=3), 1),
+      name="dim1_last",
+  )
+
+
+def _sample_inputs_weight_norm_interface_backward(
+    op_info: OpInfo,
+    device: torch.device,
+    dtype: torch.dtype,
+    requires_grad: bool,
+    **kwargs: Any,
+) -> Iterable[SampleInput]:
+  """Deterministic sample inputs generator for _weight_norm_interface_backward."""
+  del op_info, requires_grad, kwargs
+  make_arg = functools.partial(
+      _make_analytic_tensor,
+      device=device,
+      dtype=dtype,
+      low=0.5,
+      high=2.0,
+  )
+  if dtype not in (
+      torch.float16,
+      torch.bfloat16,
+      torch.float32,
+      torch.float64,
+  ):
+    yield SampleInput(
+        make_arg((4, 6), offset=0),
+        args=(
+            make_arg((4, 6), offset=1),
+            make_arg((4, 1), offset=2),
+            make_arg((4, 1), offset=3),
+            0,
+        ),
+        name="unsupported_dtype",
+    )
+    return
+  norm_dtype = (
+      torch.float32 if dtype in (torch.float16, torch.bfloat16) else dtype
+  )
+  v0 = make_arg((4, 6), offset=0)
+  g0 = make_arg((4, 1), offset=1)
+  norms0 = torch.linalg.vector_norm(v0.float(), dim=1, keepdim=True).to(
+      norm_dtype
+  )
+  yield SampleInput(
+      make_arg((4, 6), offset=2),
+      args=(v0, g0, norms0, 0),
+      name="dim0",
+  )
+  v1 = make_arg((4, 6), offset=3)
+  g1 = make_arg((1, 6), offset=4)
+  norms1 = torch.linalg.vector_norm(v1.float(), dim=0, keepdim=True).to(
+      norm_dtype
+  )
+  yield SampleInput(
+      make_arg((4, 6), offset=5),
+      args=(v1, g1, norms1, 1),
+      name="dim1_last",
+  )
+
+
+def _sample_inputs_gru_input(
+    op_info: OpInfo,
+    device: torch.device,
+    dtype: torch.dtype,
+    requires_grad: bool,
+    **kwargs: Any,
+) -> Iterable[SampleInput]:
+  """Deterministic sample inputs generator for gru.input."""
+  del op_info, kwargs
+  make_arg = functools.partial(
+      _make_analytic_tensor,
+      device=device,
+      dtype=dtype,
+      low=-0.5,
+      high=0.5,
+      requires_grad=requires_grad,
+  )
+  seq_len, batch_size, input_size, hidden_size = 4, 2, 4, 6
+  if dtype not in (
+      torch.float16,
+      torch.bfloat16,
+      torch.float32,
+      torch.float64,
+  ):
+    yield SampleInput(
+        make_arg((seq_len, batch_size, input_size), offset=0),
+        args=(
+            make_arg((1, batch_size, hidden_size), offset=1),
+            [
+                make_arg((3 * hidden_size, input_size), offset=2),
+                make_arg((3 * hidden_size, hidden_size), offset=3),
+                make_arg((3 * hidden_size,), offset=4),
+                make_arg((3 * hidden_size,), offset=5),
+            ],
+            True,
+            1,
+            0.0,
+            True,
+            False,
+            False,
+        ),
+        name="unsupported_dtype",
+    )
+    return
+  # Unidirectional, has_biases=True, batch_first=False
+  yield SampleInput(
+      make_arg((seq_len, batch_size, input_size), offset=0),
+      args=(
+          make_arg((1, batch_size, hidden_size), offset=1),
+          [
+              make_arg((3 * hidden_size, input_size), offset=2),
+              make_arg((3 * hidden_size, hidden_size), offset=3),
+              make_arg((3 * hidden_size,), offset=4),
+              make_arg((3 * hidden_size,), offset=5),
+          ],
+          True,
+          1,
+          0.0,
+          True,
+          False,
+          False,
+      ),
+      name="unidirectional_with_bias",
+  )
+  # Bidirectional, has_biases=False, batch_first=True
+  yield SampleInput(
+      make_arg((batch_size, seq_len, input_size), offset=6),
+      args=(
+          make_arg((2, batch_size, hidden_size), offset=7),
+          [
+              make_arg((3 * hidden_size, input_size), offset=8),
+              make_arg((3 * hidden_size, hidden_size), offset=9),
+              make_arg((3 * hidden_size, input_size), offset=10),
+              make_arg((3 * hidden_size, hidden_size), offset=11),
+          ],
+          False,
+          1,
+          0.0,
+          True,
+          True,
+          True,
+      ),
+      name="bidirectional_no_bias_batch_first",
+  )
+
+
+def _sample_inputs_lstm_input(
+    op_info: OpInfo,
+    device: torch.device,
+    dtype: torch.dtype,
+    requires_grad: bool,
+    **kwargs: Any,
+) -> Iterable[SampleInput]:
+  """Deterministic sample inputs generator for lstm.input."""
+  del op_info, kwargs
+  make_arg = functools.partial(
+      _make_analytic_tensor,
+      device=device,
+      dtype=dtype,
+      low=-0.5,
+      high=0.5,
+      requires_grad=requires_grad,
+  )
+  seq_len, batch_size, input_size, hidden_size = 4, 2, 4, 6
+  if dtype not in (
+      torch.float16,
+      torch.bfloat16,
+      torch.float32,
+      torch.float64,
+  ):
+    yield SampleInput(
+        make_arg((seq_len, batch_size, input_size), offset=0),
+        args=(
+            [
+                make_arg((1, batch_size, hidden_size), offset=1),
+                make_arg((1, batch_size, hidden_size), offset=2),
+            ],
+            [
+                make_arg((4 * hidden_size, input_size), offset=3),
+                make_arg((4 * hidden_size, hidden_size), offset=4),
+                make_arg((4 * hidden_size,), offset=5),
+                make_arg((4 * hidden_size,), offset=6),
+            ],
+            True,
+            1,
+            0.0,
+            True,
+            False,
+            False,
+        ),
+        name="unsupported_dtype",
+    )
+    return
+  # Unidirectional, has_biases=True, batch_first=False
+  yield SampleInput(
+      make_arg((seq_len, batch_size, input_size), offset=0),
+      args=(
+          [
+              make_arg((1, batch_size, hidden_size), offset=1),
+              make_arg((1, batch_size, hidden_size), offset=2),
+          ],
+          [
+              make_arg((4 * hidden_size, input_size), offset=3),
+              make_arg((4 * hidden_size, hidden_size), offset=4),
+              make_arg((4 * hidden_size,), offset=5),
+              make_arg((4 * hidden_size,), offset=6),
+          ],
+          True,
+          1,
+          0.0,
+          True,
+          False,
+          False,
+      ),
+      name="unidirectional_with_bias",
+  )
+  # Bidirectional, has_biases=False, batch_first=True
+  yield SampleInput(
+      make_arg((batch_size, seq_len, input_size), offset=7),
+      args=(
+          [
+              make_arg((2, batch_size, hidden_size), offset=8),
+              make_arg((2, batch_size, hidden_size), offset=9),
+          ],
+          [
+              make_arg((4 * hidden_size, input_size), offset=10),
+              make_arg((4 * hidden_size, hidden_size), offset=11),
+              make_arg((4 * hidden_size, input_size), offset=12),
+              make_arg((4 * hidden_size, hidden_size), offset=13),
+          ],
+          False,
+          1,
+          0.0,
+          True,
+          True,
+          True,
+      ),
+      name="bidirectional_no_bias_batch_first",
+  )
+
+
+def _sample_inputs_jagged_to_padded_dense_forward(
+    op_info: OpInfo,
+    device: torch.device,
+    dtype: torch.dtype,
+    requires_grad: bool,
+    **kwargs: Any,
+) -> Iterable[SampleInput]:
+  """Deterministic sample inputs generator for _jagged_to_padded_dense_forward."""
+  del op_info, kwargs
+  req_grad = requires_grad and (dtype.is_floating_point or dtype.is_complex)
+  values = _make_analytic_tensor(
+      (6, 4), dtype=dtype, device=device, requires_grad=req_grad
+  )
+  offsets_i64 = torch.tensor([0, 2, 3, 6], device=device, dtype=torch.int64)
+  if dtype in quantize_utils.QUANTIZED_NUMERIC_DTYPES:
+    yield SampleInput(
+        values,
+        args=([offsets_i64], [4], 0.0),
+        name="unsupported_dtype",
+    )
+    return
+  yield SampleInput(
+      values,
+      args=([offsets_i64], [4], 0.0),
+      name="basic_1d_jagged",
+  )
+
+
+def _sample_inputs_padded_dense_to_jagged_forward(
+    op_info: OpInfo,
+    device: torch.device,
+    dtype: torch.dtype,
+    requires_grad: bool,
+    **kwargs: Any,
+) -> Iterable[SampleInput]:
+  """Deterministic sample inputs generator for _padded_dense_to_jagged_forward."""
+  del op_info, kwargs
+  req_grad = requires_grad and (dtype.is_floating_point or dtype.is_complex)
+  dense = _make_analytic_tensor(
+      (3, 4, 4), dtype=dtype, device=device, requires_grad=req_grad
+  )
+  offsets_i64 = torch.tensor([0, 2, 3, 6], device=device, dtype=torch.int64)
+  if dtype in quantize_utils.QUANTIZED_NUMERIC_DTYPES:
+    yield SampleInput(
+        dense,
+        args=([offsets_i64], 6),
+        name="unsupported_dtype",
+    )
+    return
+  yield SampleInput(
+      dense,
+      args=([offsets_i64], 6),
+      name="basic_3d_dense",
+  )
+
+
+def _sample_inputs_embedding_renorm_(
+    op_info: OpInfo,
+    device: torch.device,
+    dtype: torch.dtype,
+    requires_grad: bool,
+    **kwargs: Any,
+) -> Iterable[SampleInput]:
+  """Deterministic sample inputs generator for embedding_renorm_."""
+  del op_info, requires_grad, kwargs
+  weights = _make_analytic_tensor(
+      (8, 4), dtype=dtype, device=device, low=-2.0, high=2.0
+  )
+  indices = torch.tensor([0, 2, 5, 2], device=device, dtype=torch.int64)
+  if dtype not in (
+      torch.float16,
+      torch.bfloat16,
+      torch.float32,
+      torch.float64,
+  ):
+    yield SampleInput(
+        weights,
+        args=(indices, 1.0, 2.0),
+        name="unsupported_dtype",
+    )
+    return
+  yield SampleInput(
+      weights,
+      args=(indices, 1.0, 2.0),
+      name="l2_norm_max1",
+  )
+  yield SampleInput(
+      weights.clone(),
+      args=(indices.clone(), 0.5, 1.0),
+      name="l1_norm_max0_5",
+  )
+
+
+def _sample_inputs_bitshift(
+    op_info: OpInfo,
+    device: torch.device,
+    dtype: torch.dtype,
+    requires_grad: bool,
+    **kwargs: Any,
+) -> Iterable[SampleInput]:
+  """Deterministic sample inputs generator for __lshift__ and __rshift__."""
+  del op_info, requires_grad, kwargs
+  lhs = _make_analytic_tensor(
+      (4, 4), dtype=dtype, device=device, low=1, high=16, offset=0
+  )
+  rhs = _make_analytic_tensor(
+      (4, 4), dtype=dtype, device=device, low=0, high=3, offset=1
+  )
+  if dtype not in (
+      torch.uint8,
+      torch.int8,
+      torch.int16,
+      torch.int32,
+      torch.int64,
+  ):
+    yield SampleInput(lhs, args=(rhs,), name="unsupported_dtype")
+    return
+  yield SampleInput(lhs, args=(rhs,), name="tensor_shift")
+  yield SampleInput(lhs.clone(), args=(2,), name="scalar_shift")
+
+
+def _addmm_dtype_wrapper(
+    self: torch.Tensor,
+    mat1: torch.Tensor,
+    mat2: torch.Tensor,
+    out_dtype: torch.dtype,
+    *,
+    beta: float = 1,
+    alpha: float = 1,
+    out: torch.Tensor | None = None,
+) -> torch.Tensor:
+  if out is not None:
+    if out.dtype != out_dtype:
+      raise RuntimeError(
+          "out_dtype must be the same as the dtype of the provided out tensor"
+      )
+    if out.shape == (0,):
+      out.resize_((mat1.size(0), mat2.size(1)))
+    return torch.ops.aten.addmm.dtype_out(
+        self, mat1, mat2, out_dtype, beta=beta, alpha=alpha, out=out
+    )
+  return torch.ops.aten.addmm.dtype(
+      self, mat1, mat2, out_dtype, beta=beta, alpha=alpha
+  )
+
+
+def _baddbmm_dtype_wrapper(
+    self: torch.Tensor,
+    batch1: torch.Tensor,
+    batch2: torch.Tensor,
+    out_dtype: torch.dtype,
+    *,
+    beta: float = 1,
+    alpha: float = 1,
+    out: torch.Tensor | None = None,
+) -> torch.Tensor:
+  if out is not None:
+    if out.dtype != out_dtype:
+      raise RuntimeError(
+          "out_dtype must be the same as the dtype of the provided out tensor"
+      )
+    if out.shape == (0,):
+      out.resize_((batch1.size(0), batch1.size(1), batch2.size(2)))
+    return torch.ops.aten.baddbmm.dtype_out(
+        self, batch1, batch2, out_dtype, beta=beta, alpha=alpha, out=out
+    )
+  return torch.ops.aten.baddbmm.dtype(
+      self, batch1, batch2, out_dtype, beta=beta, alpha=alpha
+  )
+
+
+def _bmm_dtype_wrapper(
+    self: torch.Tensor,
+    mat2: torch.Tensor,
+    out_dtype: torch.dtype,
+    *,
+    out: torch.Tensor | None = None,
+) -> torch.Tensor:
+  if out is not None:
+    if out.dtype != out_dtype:
+      raise RuntimeError(
+          "out_dtype must be the same as the dtype of the provided out tensor"
+      )
+    if out.shape == (0,):
+      out.resize_((self.size(0), self.size(1), mat2.size(2)))
+    return torch.ops.aten.bmm.dtype_out(self, mat2, out_dtype, out=out)
+  return torch.ops.aten.bmm.dtype(self, mat2, out_dtype)
+
+
+def _mm_dtype_wrapper(
+    self: torch.Tensor,
+    mat2: torch.Tensor,
+    out_dtype: torch.dtype,
+    *,
+    out: torch.Tensor | None = None,
+) -> torch.Tensor:
+  if out is not None:
+    if out.dtype != out_dtype:
+      raise RuntimeError(
+          "out_dtype must be the same as the dtype of the provided out tensor"
+      )
+    if out.shape == (0,):
+      out.resize_((self.size(0), mat2.size(1)))
+    return torch.ops.aten.mm.dtype_out(self, mat2, out_dtype, out=out)
+  return torch.ops.aten.mm.dtype(self, mat2, out_dtype)
+
+
+def _sample_inputs_addmm_dtype(
+    op_info: OpInfo,
+    device: torch.device,
+    dtype: torch.dtype,
+    requires_grad: bool,
+    **kwargs: Any,
+) -> Iterable[SampleInput]:
+  """Deterministic sample inputs generator for addmm.dtype."""
+  del op_info, kwargs
+  make_arg = functools.partial(
+      _make_analytic_tensor,
+      device=device,
+      dtype=dtype,
+      requires_grad=requires_grad,
+  )
+  m, k, n = 4, 6, 8
+  if dtype not in (
+      torch.float16,
+      torch.bfloat16,
+      torch.float32,
+      torch.float64,
+      torch.complex64,
+      torch.complex128,
+  ):
+    yield SampleInput(
+        make_arg((m, n), offset=0),
+        args=(make_arg((m, k), offset=1), make_arg((k, n), offset=2), dtype),
+        kwargs={"beta": 1, "alpha": 1},
+        name="unsupported_dtype",
+    )
+    return
+  yield SampleInput(
+      make_arg((m, n), offset=0),
+      args=(make_arg((m, k), offset=1), make_arg((k, n), offset=2), dtype),
+      kwargs={"beta": 1, "alpha": 1},
+      name="2d_bias_default_scales",
+  )
+  yield SampleInput(
+      make_arg((n,), offset=3),
+      args=(make_arg((m, k), offset=4), make_arg((k, n), offset=5), dtype),
+      kwargs={"beta": 2, "alpha": 1},
+      name="1d_bias_beta2",
+  )
+
+
+def _sample_inputs_baddbmm_dtype(
+    op_info: OpInfo,
+    device: torch.device,
+    dtype: torch.dtype,
+    requires_grad: bool,
+    **kwargs: Any,
+) -> Iterable[SampleInput]:
+  """Deterministic sample inputs generator for baddbmm.dtype."""
+  del op_info, kwargs
+  make_arg = functools.partial(
+      _make_analytic_tensor,
+      device=device,
+      dtype=dtype,
+      requires_grad=requires_grad,
+  )
+  b, m, k, n = 2, 4, 6, 8
+  if dtype not in (
+      torch.float16,
+      torch.bfloat16,
+      torch.float32,
+      torch.float64,
+      torch.complex64,
+      torch.complex128,
+  ):
+    yield SampleInput(
+        make_arg((b, m, n), offset=0),
+        args=(
+            make_arg((b, m, k), offset=1),
+            make_arg((b, k, n), offset=2),
+            dtype,
+        ),
+        kwargs={"beta": 1, "alpha": 1},
+        name="unsupported_dtype",
+    )
+    return
+  yield SampleInput(
+      make_arg((b, m, n), offset=0),
+      args=(
+          make_arg((b, m, k), offset=1),
+          make_arg((b, k, n), offset=2),
+          dtype,
+      ),
+      kwargs={"beta": 1, "alpha": 1},
+      name="3d_bias_beta1",
+  )
+  yield SampleInput(
+      make_arg((b, m, n), offset=3),
+      args=(
+          make_arg((b, m, k), offset=4),
+          make_arg((b, k, n), offset=5),
+          dtype,
+      ),
+      kwargs={"beta": 2, "alpha": 1},
+      name="3d_bias_beta2",
+  )
+
+
+def _sample_inputs_bmm_dtype(
+    op_info: OpInfo,
+    device: torch.device,
+    dtype: torch.dtype,
+    requires_grad: bool,
+    **kwargs: Any,
+) -> Iterable[SampleInput]:
+  """Deterministic sample inputs generator for bmm.dtype."""
+  del op_info, kwargs
+  make_arg = functools.partial(
+      _make_analytic_tensor,
+      device=device,
+      dtype=dtype,
+      requires_grad=requires_grad,
+  )
+  b, m, k, n = 2, 4, 6, 8
+  if dtype not in (
+      torch.float16,
+      torch.bfloat16,
+      torch.float32,
+      torch.float64,
+      torch.complex64,
+      torch.complex128,
+  ):
+    yield SampleInput(
+        make_arg((b, m, k), offset=0),
+        args=(make_arg((b, k, n), offset=1), dtype),
+        name="unsupported_dtype",
+    )
+    return
+  yield SampleInput(
+      make_arg((b, m, k), offset=0),
+      args=(make_arg((b, k, n), offset=1), dtype),
+      name="batch2_4x6_6x8",
+  )
+  yield SampleInput(
+      make_arg((3, 5, 4), offset=2),
+      args=(make_arg((3, 4, 7), offset=3), dtype),
+      name="batch3_5x4_4x7",
+  )
+
+
+def _sample_inputs_mm_dtype(
+    op_info: OpInfo,
+    device: torch.device,
+    dtype: torch.dtype,
+    requires_grad: bool,
+    **kwargs: Any,
+) -> Iterable[SampleInput]:
+  """Deterministic sample inputs generator for mm.dtype."""
+  del op_info, kwargs
+  make_arg = functools.partial(
+      _make_analytic_tensor,
+      device=device,
+      dtype=dtype,
+      requires_grad=requires_grad,
+  )
+  m, k, n = 4, 6, 8
+  if dtype not in (
+      torch.float16,
+      torch.bfloat16,
+      torch.float32,
+      torch.float64,
+      torch.complex64,
+      torch.complex128,
+  ):
+    yield SampleInput(
+        make_arg((m, k), offset=0),
+        args=(make_arg((k, n), offset=1), dtype),
+        name="unsupported_dtype",
+    )
+    return
+  yield SampleInput(
+      make_arg((m, k), offset=0),
+      args=(make_arg((k, n), offset=1), dtype),
+      name="same_out_dtype_4x6_6x8",
+  )
+  if dtype in (torch.float16, torch.bfloat16):
+    yield SampleInput(
+        make_arg((m, k), offset=2),
+        args=(make_arg((k, n), offset=3), torch.float32),
+        name="fp32_out_dtype_4x6_6x8",
+    )
+  else:
+    yield SampleInput(
+        make_arg((5, 4), offset=2),
+        args=(make_arg((4, 7), offset=3), dtype),
+        name="same_out_dtype_5x4_4x7",
+    )
+
+
 # Ops not included in the list of tested ops for pytorch.
 _ADDITIONAL_TORCH_TPU_OPS: Final[Sequence[OpInfo]] = [
     OpInfo(
@@ -3073,6 +4280,207 @@ _ADDITIONAL_TORCH_TPU_OPS: Final[Sequence[OpInfo]] = [
         ),
         sample_inputs_func=_sample_inputs_sparse_coo_copy_,
         supports_out=False,
+        supports_autograd=False,
+    ),
+    OpInfo(
+        "__lshift__",
+        op=torch.Tensor.__lshift__,
+        inplace_variant=torch.Tensor.__ilshift__,
+        aten_name="__lshift__",
+        dtypes=common_dtype.integral_types(),
+        sample_inputs_func=_sample_inputs_bitshift,
+        supports_out=False,
+        supports_autograd=False,
+    ),
+    OpInfo(
+        "__rshift__",
+        op=torch.Tensor.__rshift__,
+        inplace_variant=torch.Tensor.__irshift__,
+        aten_name="__rshift__",
+        dtypes=common_dtype.integral_types(),
+        sample_inputs_func=_sample_inputs_bitshift,
+        supports_out=False,
+        supports_autograd=False,
+    ),
+    OpInfo(
+        "_addmm_activation",
+        op=torch._addmm_activation,
+        aten_name="_addmm_activation",
+        dtypes=common_dtype.floating_types_and(torch.bfloat16, torch.float16),
+        sample_inputs_func=_sample_inputs_addmm_activation,
+        supports_out=True,
+        supports_autograd=False,
+    ),
+    OpInfo(
+        "_fused_moving_avg_obs_fq_helper",
+        op=_fused_moving_avg_obs_fq_helper_wrapper,
+        aten_name="_fused_moving_avg_obs_fq_helper",
+        dtypes=common_dtype.floating_types_and(torch.bfloat16, torch.float16),
+        sample_inputs_func=_sample_inputs_fused_moving_avg_obs_fq_helper,
+        supports_out=False,
+        supports_autograd=True,
+    ),
+    OpInfo(
+        "_grouped_mm",
+        op=torch._grouped_mm,
+        aten_name="_grouped_mm",
+        dtypes=common_dtype.floating_types_and(torch.bfloat16, torch.float16),
+        sample_inputs_func=_sample_inputs_grouped_mm,
+        supports_out=False,
+        supports_autograd=False,
+    ),
+    OpInfo(
+        "_jagged_to_padded_dense_forward",
+        op=torch.ops.aten._jagged_to_padded_dense_forward,
+        aten_name="_jagged_to_padded_dense_forward",
+        dtypes=common_dtype.all_types_and_complex_and(
+            torch.bfloat16, torch.float16, torch.bool
+        ),
+        sample_inputs_func=_sample_inputs_jagged_to_padded_dense_forward,
+        supports_out=False,
+        supports_autograd=False,
+    ),
+    OpInfo(
+        "_masked_softmax",
+        op=torch.ops.aten._masked_softmax,
+        aten_name="_masked_softmax",
+        dtypes=common_dtype.floating_types_and(torch.bfloat16, torch.float16),
+        sample_inputs_func=_sample_inputs_masked_softmax,
+        supports_out=True,
+        supports_autograd=True,
+    ),
+    OpInfo(
+        "_masked_softmax_backward",
+        op=torch.ops.aten._masked_softmax_backward,
+        aten_name="_masked_softmax_backward",
+        dtypes=common_dtype.floating_types_and(torch.bfloat16, torch.float16),
+        sample_inputs_func=_sample_inputs_masked_softmax_backward,
+        supports_out=True,
+        supports_autograd=False,
+    ),
+    OpInfo(
+        "_padded_dense_to_jagged_forward",
+        op=torch.ops.aten._padded_dense_to_jagged_forward,
+        aten_name="_padded_dense_to_jagged_forward",
+        dtypes=common_dtype.all_types_and_complex_and(
+            torch.bfloat16, torch.float16, torch.bool
+        ),
+        sample_inputs_func=_sample_inputs_padded_dense_to_jagged_forward,
+        supports_out=False,
+        supports_autograd=False,
+    ),
+    OpInfo(
+        "_weight_norm_interface",
+        op=torch.ops.aten._weight_norm_interface,
+        aten_name="_weight_norm_interface",
+        dtypes=common_dtype.floating_types_and(torch.bfloat16, torch.float16),
+        sample_inputs_func=_sample_inputs_weight_norm_interface,
+        supports_out=False,
+        supports_autograd=True,
+    ),
+    OpInfo(
+        "_weight_norm_interface_backward",
+        op=torch.ops.aten._weight_norm_interface_backward,
+        aten_name="_weight_norm_interface_backward",
+        dtypes=common_dtype.floating_types_and(torch.bfloat16, torch.float16),
+        sample_inputs_func=_sample_inputs_weight_norm_interface_backward,
+        supports_out=False,
+        supports_autograd=False,
+    ),
+    OpInfo(
+        "addmm.dtype",
+        op=_addmm_dtype_wrapper,
+        aten_name="addmm.dtype",
+        dtypes=common_dtype.floating_and_complex_types_and(
+            torch.bfloat16, torch.float16
+        ),
+        sample_inputs_func=_sample_inputs_addmm_dtype,
+        supports_out=True,
+        supports_autograd=False,
+    ),
+    OpInfo(
+        "baddbmm.dtype",
+        op=_baddbmm_dtype_wrapper,
+        aten_name="baddbmm.dtype",
+        dtypes=common_dtype.floating_and_complex_types_and(
+            torch.bfloat16, torch.float16
+        ),
+        sample_inputs_func=_sample_inputs_baddbmm_dtype,
+        supports_out=True,
+        supports_autograd=False,
+    ),
+    OpInfo(
+        "bmm.dtype",
+        op=_bmm_dtype_wrapper,
+        aten_name="bmm.dtype",
+        dtypes=common_dtype.floating_and_complex_types_and(
+            torch.bfloat16, torch.float16
+        ),
+        sample_inputs_func=_sample_inputs_bmm_dtype,
+        supports_out=True,
+        supports_autograd=False,
+    ),
+    OpInfo(
+        "col2im",
+        op=torch.ops.aten.col2im,
+        aten_name="col2im",
+        dtypes=common_dtype.floating_and_complex_types_and(
+            torch.bfloat16, torch.float16
+        ),
+        sample_inputs_func=_sample_inputs_col2im,
+        supports_out=False,
+        supports_autograd=True,
+    ),
+    OpInfo(
+        "embedding_renorm_",
+        op=lambda self, indices, max_norm, norm_type=2.0: (
+            torch.embedding_renorm_(self.clone(), indices, max_norm, norm_type)
+        ),
+        inplace_variant=torch.embedding_renorm_,
+        aten_name="embedding_renorm_",
+        dtypes=common_dtype.floating_types_and(torch.bfloat16, torch.float16),
+        sample_inputs_func=_sample_inputs_embedding_renorm_,
+        supports_out=False,
+        supports_autograd=False,
+    ),
+    OpInfo(
+        "fake_quantize_per_tensor_affine_cachemask",
+        op=torch.ops.aten.fake_quantize_per_tensor_affine_cachemask,
+        aten_name="fake_quantize_per_tensor_affine_cachemask",
+        dtypes=common_dtype.floating_types_and(torch.bfloat16, torch.float16),
+        sample_inputs_func=(
+            _sample_inputs_fake_quantize_per_tensor_affine_cachemask
+        ),
+        supports_out=False,
+        supports_autograd=False,
+    ),
+    OpInfo(
+        "gru.input",
+        op=torch.ops.aten.gru.input,
+        aten_name="gru.input",
+        dtypes=common_dtype.floating_types_and(torch.bfloat16, torch.float16),
+        sample_inputs_func=_sample_inputs_gru_input,
+        supports_out=False,
+        supports_autograd=True,
+    ),
+    OpInfo(
+        "lstm.input",
+        op=torch.ops.aten.lstm.input,
+        aten_name="lstm.input",
+        dtypes=common_dtype.floating_types_and(torch.bfloat16, torch.float16),
+        sample_inputs_func=_sample_inputs_lstm_input,
+        supports_out=False,
+        supports_autograd=True,
+    ),
+    OpInfo(
+        "mm.dtype",
+        op=_mm_dtype_wrapper,
+        aten_name="mm.dtype",
+        dtypes=common_dtype.floating_and_complex_types_and(
+            torch.bfloat16, torch.float16
+        ),
+        sample_inputs_func=_sample_inputs_mm_dtype,
+        supports_out=True,
         supports_autograd=False,
     ),
 ]
@@ -4642,6 +6050,10 @@ def _compiled_supports_op(
       # compiled .out variant with dim.
       "max.out",
       "min.out",
+      # Zero-element 1D (0,) out tensor passed by _prepare_out fails shape
+      # expansion in Inductor for 4D _masked_softmax inputs.
+      "_masked_softmax.out",
+      "_masked_softmax_backward.out",
   ]
   if utils.get_torch_version() < (2, 15, 0):
     # Before PyTorch 2.15, Dynamo does not treat a torch.return_types `out=`
