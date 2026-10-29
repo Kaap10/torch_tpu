@@ -25,6 +25,7 @@
 #include "ATen/core/TensorBody.h"
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
+#include "c10/core/Device.h"
 #include "csrc/common/dimension_types.h"
 
 namespace torch_tpu {
@@ -45,10 +46,19 @@ struct UnexpandedZeroStrideIndex {
 std::optional<UnexpandedZeroStrideIndex> TryUnexpandZeroStrideIndex(
     const at::Tensor& index);
 
+// Transfers CPU auxiliary index or boolean mask tensors to TPU via
+// `CopyToTpuTensor` without triggering PyTorch dispatcher re-entry or
+// `CompositeOpCheck` failures during tracing. Returns defined TPU tensors and
+// undefined tensors unchanged.
+absl::StatusOr<at::Tensor> ResolveAuxiliaryTensorDevice(
+    const at::Tensor& tensor,
+    std::optional<c10::DeviceIndex> tpu_device_index = std::nullopt);
+
 // Resolves negative indices by converting them to positive indices
-absl::Status ResolveNegativeIndices(std::vector<at::Tensor>& indices,
-                                    at::IntArrayRef sizes,
-                                    const Indices& dimensions);
+absl::Status ResolveNegativeIndices(
+    std::vector<at::Tensor>& indices, at::IntArrayRef sizes,
+    const Indices& dimensions,
+    std::optional<c10::DeviceIndex> tpu_device_index = std::nullopt);
 
 absl::StatusOr<int64_t> ValidateIndexInputsAndGetDim(const at::Tensor& self,
                                                      int64_t dim,

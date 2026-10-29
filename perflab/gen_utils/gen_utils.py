@@ -1059,7 +1059,6 @@ _GEN_MODEL_CONFIGS_RAW: dict[str, dict[str, Any]] = {
     "lightglue_superpoint_forward_gen": {
         "skipped_run_modes": {
             "compiled",
-            "eager_optimized",
         },
     },
     "lightglue_superpoint_train_gen": {

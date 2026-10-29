@@ -135,8 +135,11 @@ absl::StatusOr<std::vector<at::Tensor>> ConvertBooleanIndicesToPositional(
         self_dim++;
       }
 
+      TT_ASSIGN_OR_RETURN(
+          at::Tensor tpu_mask,
+          ResolveAuxiliaryTensorDevice(index_tensor, self.device().index()));
       at::Tensor nonzero_result =
-          AtenNonzero(index_tensor);  // Shape (L, mask_ndim)
+          AtenNonzero(tpu_mask);  // Shape (L, mask_ndim)
       // Decompose the columns of the non-zero result, with each column becoming
       // a separate 1D integer tensor.
       for (int64_t i = 0; i < index_tensor.dim(); ++i) {
@@ -376,6 +379,8 @@ absl::Status IndexPutWithBooleanMask(const at::Tensor& self,
         << self.sizes();
     self_dim++;
   }
+  TT_ASSIGN_OR_RETURN(at::Tensor tpu_mask, ResolveAuxiliaryTensorDevice(
+                                               mask, self.device().index()));
   TT_ASSIGN_OR_RETURN(  // ERROR_COV_INFEASIBLE=the op creates cache keys
                         // successfully.
       auto param_keys,
@@ -389,7 +394,7 @@ absl::Status IndexPutWithBooleanMask(const at::Tensor& self,
 
   TT_ASSIGN_OR_RETURN(const auto elem_type,
                       ConvertTo<mlir::ElementType>(self.scalar_type()));
-  return DispatchOpOut<3>(std::move(index_op_builder), {self, mask, values},
+  return DispatchOpOut<3>(std::move(index_op_builder), {self, tpu_mask, values},
                           out,
                           {.out_dtype = elem_type,
                            .out_dims = at::IntArrayRef(self.sizes()),
@@ -405,8 +410,8 @@ absl::Status IndexPut(
       std::vector<at::Tensor> index_tensors,
       ConvertBooleanIndicesToPositional(self, indices_list_opt, indexed_dims));
 
-  TT_RETURN_IF_ERROR(
-      ResolveNegativeIndices(index_tensors, self.sizes(), indexed_dims));
+  TT_RETURN_IF_ERROR(ResolveNegativeIndices(
+      index_tensors, self.sizes(), indexed_dims, self.device().index()));
 
   TT_RET_CHECK(!indexed_dims.empty(), error::kInvalidArgument)
       << "indices must be specified";

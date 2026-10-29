@@ -13913,6 +13913,120 @@ class OpsUnitTest(TorchTpuVsCpuTestBase):
 
     self.assert_close_tpu_vs_cpu(test_fn)
 
+  def test_boolean_mask_cpu_tensor_index(self):
+    # 1D CPU boolean mask with repeat_interleave + ~mask (LightGlue pattern).
+    x_3d = torch.randn(4, 6, 8, dtype=torch.float32)
+    prune_mask_cpu = torch.tensor([True, False], dtype=torch.bool, device="cpu")
+    mask_1d_cpu = ~prune_mask_cpu.repeat_interleave(2)
+    self.assert_close_tpu_vs_cpu(lambda device: x_3d.to(device)[mask_1d_cpu])
+
+    # 2D CPU boolean mask with leading and trailing slices, plus non-contiguous.
+    x_4d = torch.randn(2, 3, 4, 5, dtype=torch.bfloat16)
+    mask_2d_cpu = torch.tensor(
+        [
+            [True, False, True],
+            [False, True, False],
+            [True, True, False],
+            [False, False, True],
+        ],
+        dtype=torch.bool,
+        device="cpu",
+    ).t()
+    self.assert_close_tpu_vs_cpu(
+        lambda device: x_4d.to(device)[:, mask_2d_cpu, :]
+    )
+
+    # Zero-sized CPU boolean mask.
+    x_empty = torch.randn(2, 0, 4, dtype=torch.float32)
+    mask_empty_cpu = torch.zeros(0, 4, dtype=torch.bool, device="cpu")
+    self.assert_close_tpu_vs_cpu(
+        lambda device: x_empty.to(device)[:, mask_empty_cpu]
+    )
+
+    # 0D True and False CPU boolean masks.
+    x_2d = torch.randn(2, 3, dtype=torch.float32)
+    mask_true_0d = torch.tensor(True, dtype=torch.bool, device="cpu")
+    mask_false_0d = torch.tensor(False, dtype=torch.bool, device="cpu")
+    self.assert_close_tpu_vs_cpu(
+        lambda device: x_2d.to(device)[:, mask_true_0d, :]
+    )
+    self.assert_close_tpu_vs_cpu(lambda device: x_2d.to(device)[mask_false_0d])
+
+  def test_boolean_mask_cpu_tensor_index_put(self):
+    mask_1d_cpu = torch.tensor(
+        [False, True, False, True], dtype=torch.bool, device="cpu"
+    )
+
+    # Select fast path (broadcastable values, overwrite and accumulate).
+    def select_overwrite(device):
+      t = torch.arange(8, dtype=torch.float32, device=device).reshape(4, 2)
+      t[mask_1d_cpu] = torch.tensor(9.0, dtype=torch.float32, device=device)
+      return t
+
+    self.assert_close_tpu_vs_cpu(select_overwrite)
+
+    def select_accumulate(device):
+      t = torch.arange(8, dtype=torch.float32, device=device).reshape(4, 2)
+      t[mask_1d_cpu] += torch.tensor(
+          [10.0, 20.0], dtype=torch.float32, device=device
+      )
+      return t
+
+    self.assert_close_tpu_vs_cpu(select_accumulate)
+
+    # 0D CPU boolean masks on select fast path.
+    mask_true_0d = torch.tensor(True, dtype=torch.bool, device="cpu")
+    mask_false_0d = torch.tensor(False, dtype=torch.bool, device="cpu")
+
+    def select_0d(device):
+      t1 = torch.ones(2, 3, dtype=torch.float32, device=device)
+      t1[:, mask_true_0d] = torch.tensor(
+          5.0, dtype=torch.float32, device=device
+      )
+      t2 = torch.ones(2, 3, dtype=torch.float32, device=device)
+      t2[mask_false_0d] = torch.tensor(7.0, dtype=torch.float32, device=device)
+      return t1, t2
+
+    self.assert_close_tpu_vs_cpu(select_0d)
+
+    # Scatter path (non-broadcastable values varying across masked dimension).
+    def scatter_overwrite_and_accumulate(device):
+      t = torch.zeros(4, 2, dtype=torch.float32, device=device)
+      vals = torch.tensor(
+          [[1.0, 2.0], [3.0, 4.0]], dtype=torch.float32, device=device
+      )
+      t[mask_1d_cpu] = vals
+      t[mask_1d_cpu] += vals
+      return t
+
+    self.assert_close_tpu_vs_cpu(scatter_overwrite_and_accumulate)
+
+    # 2D CPU boolean mask with leading slice on scatter path, plus all-False mask.
+    mask_2d_cpu = torch.tensor(
+        [[True, False, True], [False, True, False]],
+        dtype=torch.bool,
+        device="cpu",
+    )
+    mask_all_false_cpu = torch.zeros(3, dtype=torch.bool, device="cpu")
+
+    def scatter_2d_and_empty(device):
+      t = torch.zeros(2, 2, 3, dtype=torch.float32, device=device)
+      vals = torch.tensor(
+          [[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]],
+          dtype=torch.float32,
+          device=device,
+      )
+      t[:, mask_2d_cpu] = vals
+      t_empty = torch.tensor(
+          [1.0, 2.0, 3.0], dtype=torch.float32, device=device
+      )
+      t_empty[mask_all_false_cpu] = torch.empty(
+          0, dtype=torch.float32, device=device
+      )
+      return t, t_empty
+
+    self.assert_close_tpu_vs_cpu(scatter_2d_and_empty)
+
   def test_masked_fill_inplace_tensor_value_different_dtype(self):
     input_value = torch.randn(2, 3, dtype=torch.float32)
     mask_value = torch.tensor(

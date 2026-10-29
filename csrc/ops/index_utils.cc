@@ -54,22 +54,6 @@
 namespace torch_tpu {
 namespace {
 
-// PyTorch's dispatcher bypasses backend device guards for index tensors
-// during indexing out-variant and composite execution, allowing them to arrive
-// on CPU. We use CopyToTpuTensor instead of ATen's .to() to transfer CPU
-// tensors to TPU without triggering dispatcher re-entry or CompositeOpCheck
-// failures during tracing.
-absl::StatusOr<at::Tensor> ResolveAuxiliaryTensorDevice(
-    const at::Tensor& tensor) {
-  if (!tensor.defined() ||
-      tensor.device().type() == GetPrivateUse1DeviceType()) {
-    return tensor;
-  }
-  return CopyToTpuTensor(tensor, /*dtype=*/std::nullopt,
-                         /*non_blocking=*/false,
-                         /*memory_format=*/c10::MemoryFormat::Contiguous);
-}
-
 bool HasContiguousUnsqueezedStrides(
     const at::Tensor& index, absl::Span<const int64_t> unsqueezed_sizes) {
   const int64_t rank = unsqueezed_sizes.size();
@@ -87,9 +71,28 @@ bool HasContiguousUnsqueezedStrides(
 
 }  // namespace
 
-absl::Status ResolveNegativeIndices(std::vector<at::Tensor>& indices,
-                                    const at::IntArrayRef sizes,
-                                    const Indices& dimensions) {
+// PyTorch's dispatcher bypasses backend device guards for index tensors
+// during indexing out-variant and composite execution, allowing them to arrive
+// on CPU. We use CopyToTpuTensor instead of ATen's .to() to transfer CPU
+// tensors to TPU without triggering dispatcher re-entry or CompositeOpCheck
+// failures during tracing.
+absl::StatusOr<at::Tensor> ResolveAuxiliaryTensorDevice(
+    const at::Tensor& tensor,
+    const std::optional<c10::DeviceIndex> tpu_device_index) {
+  if (!tensor.defined() ||
+      tensor.device().type() == GetPrivateUse1DeviceType()) {
+    return tensor;
+  }
+  return CopyToTpuTensor(tensor, /*dtype=*/std::nullopt,
+                         /*non_blocking=*/false,
+                         /*memory_format=*/c10::MemoryFormat::Contiguous,
+                         tpu_device_index);
+}
+
+absl::Status ResolveNegativeIndices(
+    std::vector<at::Tensor>& indices, const at::IntArrayRef sizes,
+    const Indices& dimensions,
+    const std::optional<c10::DeviceIndex> tpu_device_index) {
   std::vector<at::Tensor> indices_to_resolve;
   std::vector<at::Tensor> dim_size_tensors;
   Indices original_indices;
@@ -98,7 +101,8 @@ absl::Status ResolveNegativeIndices(std::vector<at::Tensor>& indices,
     at::Tensor& index = indices[i];
     if (index.scalar_type() == c10::ScalarType::Long ||
         index.scalar_type() == c10::ScalarType::Int) {
-      TT_ASSIGN_OR_RETURN(index, ResolveAuxiliaryTensorDevice(index));
+      TT_ASSIGN_OR_RETURN(
+          index, ResolveAuxiliaryTensorDevice(index, tpu_device_index));
       indices_to_resolve.push_back(index);
 
       const int64_t dim_size = sizes[dimensions[i]];

@@ -134,9 +134,12 @@ absl::StatusOr<IndicesInfo> ValidateAndGetIndicesInfo(
       // `op_builder` lowering (`BuildBooleanMaskIndexShlo`).
       // An M-D mask consumes M dimensions of `self` (a 0D mask consumes 0
       // dimensions and inserts a new dimension at `dim_indexed`).
+      TT_ASSIGN_OR_RETURN(
+          at::Tensor tpu_mask,
+          ResolveAuxiliaryTensorDevice(index_tensor, self.device().index()));
       TT_ASSIGN_OR_RETURN(info.num_non_zero_elements,
-                          GetNumNonZeroElements(index_tensor));
-      info.indices.push_back(index_tensor);
+                          GetNumNonZeroElements(tpu_mask));
+      info.indices.push_back(std::move(tpu_mask));
       info.dimensions.push_back(dim_indexed);
       dim_indexed += index_tensor.dim();
     } else {
@@ -157,8 +160,8 @@ absl::StatusOr<IndicesInfo> ValidateAndGetIndicesInfo(
   // wrapping. For boolean masks, indices are generated on-device by
   // `BuildNonzeroShlo` and are guaranteed to be non-negative `[0, dim_size)`.
   if (!has_bool_mask) {
-    TT_RETURN_IF_ERROR(
-        ResolveNegativeIndices(info.indices, self.sizes(), info.dimensions));
+    TT_RETURN_IF_ERROR(ResolveNegativeIndices(
+        info.indices, self.sizes(), info.dimensions, self.device().index()));
   }
 
   return info;
