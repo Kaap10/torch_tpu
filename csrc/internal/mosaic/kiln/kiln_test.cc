@@ -997,6 +997,63 @@ TEST(KilnTest, ForLoopWithInductionVarAndBounds) {
   )"));
 }
 
+// Carries a scalar and a tile through four iterations.
+TEST(KilnTest, ForLoopWithCarriedState) {
+  EXPECT_THAT(CreateKernel(GridSpec{.name = "for_carry", .grid = {1}},
+                           InSpec{f32(8, 128)}, OutSpec{f32(8, 128)},
+                           [](Ref in, Ref out) {
+                             Scalar s = I32(1);
+                             Tile t = Load(in);
+                             For(0, 4, 1, {&s, &t}, [&](Scalar) {
+                               s = s + 2;
+                               t = t + Load(in);
+                             });
+                             Store(out, t * s.ToF32());
+                           }),
+              IsOkAndMatchesIr(R"(
+    CHECK-LABEL: func.func @for_carry(
+    CHECK:         %[[ONE:.*]] = arith.constant 1 : i32
+    CHECK:         %[[IN:.*]] = vector.load
+    CHECK:         %[[RES:.*]]:2 = scf.for %{{.*}} = %{{.*}} to %{{.*}} step %{{.*}} iter_args(%[[S:.*]] = %[[ONE]], %[[T:.*]] = %[[IN]]) -> (i32, vector<8x128xf32>) {
+    CHECK:           %[[S2:.*]] = arith.addi %[[S]], %{{.*}} : i32
+    CHECK:           %[[T2:.*]] = arith.addf %[[T]], %{{.*}} : vector<8x128xf32>
+    CHECK:           scf.yield %[[S2]], %[[T2]] : i32, vector<8x128xf32>
+    CHECK:         }
+    CHECK:         arith.sitofp %[[RES]]#0 : i32 to f32
+    CHECK:         arith.mulf %[[RES]]#1, %{{.*}} : vector<8x128xf32>
+  )"));
+}
+
+// An i32 -> u32 swap keeps the MLIR type, so only Kiln can catch it.
+TEST(KilnDeathTest, ForLoopRejectsChangedStateDtype) {
+  EXPECT_THAT(
+      CreateKernel(
+          GridSpec{.name = "for_carry_dtype", .grid = {1}}, InSpec{f32(8, 128)},
+          OutSpec{f32(8, 128)},
+          [](Ref, Ref) {
+            Scalar s = I32(0);
+            EXPECT_DEATH(
+                For(0, 4, 1, {&s}, [&](Scalar i) { s = i.AsType(u32); }),
+                "For\\(\\) loop variable 0 changed dtype: expected i32, got "
+                "u32");
+          }),
+      IsOk());
+}
+
+TEST(KilnTest, ForLoopWithEmptyState) {
+  EXPECT_THAT(CreateKernel(GridSpec{.name = "for_empty_carry", .grid = {1}},
+                           InSpec{f32(8, 128)}, OutSpec{f32(8, 128)},
+                           [](Ref in, Ref out) {
+                             For(0, 4, 1, {},
+                                 [&](Scalar) { Store(out, Load(in)); });
+                           }),
+              IsOkAndMatchesIr(R"(
+    CHECK:     scf.for
+    CHECK:       tpu.vector_store {{.*}}
+    CHECK-NEXT:  }
+  )"));
+}
+
 TEST(KilnDeathTest, ScalarMismatchedTypesFail) {
   absl::StatusOr<Kernel> kernel = CreateKernel(
       GridSpec{.name = "mismatched", .grid = {1}}, InSpec{f32(32, 128)},
