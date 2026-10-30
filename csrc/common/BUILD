@@ -981,6 +981,7 @@ torch_tpu_cc_test(
 
 torch_tpu_cc_library(
     name = "env_vars",
+    srcs = ["env_vars.cc"],
     hdrs = ["env_vars.h"],
     deps = [
         ":constexpr_map",
@@ -1011,6 +1012,7 @@ torch_tpu_cc_test(
         "//csrc/common:oss_test_main",
         "//shims/torch",  # build_cleaner: keep for c10::WarningUtils
         "//shims/torch/c10/util:base",
+        "@com_google_absl//absl/log:absl_check",
     ],
 )
 
