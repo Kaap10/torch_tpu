@@ -20074,6 +20074,52 @@ class OpsGradUnitTest(TorchTpuVsCpuTestBase):
 
     self.assert_close_tpu_vs_cpu(compute)
 
+  def test_avg_pool_low_precision_large_window(self):
+    """Tests 16-bit avg_pool1d/2d with windows larger than 256 elements.
+
+    Window sums (and, with count_include_pad=False, the element counts) must
+    accumulate in float32 like ATen does. Accumulating in bfloat16 cannot
+    represent counts above 256 exactly, which made the result up to 3x off.
+    """
+    torch.manual_seed(0)
+    x2d = torch.randn(2, 4, 64, 64) + 3.0
+    grad2d = torch.randn(2, 4, 4, 4)
+    x1d = torch.randn(2, 4, 2048) + 3.0
+    for dtype in (torch.bfloat16, torch.float16):
+
+      def compute_2d(device, dtype=dtype):
+        return torch.nn.functional.avg_pool2d(
+            x2d.to(dtype).to(device),
+            kernel_size=32,
+            stride=16,
+            padding=8,
+            count_include_pad=False,
+        )
+
+      def compute_2d_grad(device, dtype=dtype):
+        inp = x2d.to(dtype).to(device).requires_grad_()
+        out = torch.nn.functional.avg_pool2d(
+            inp, kernel_size=32, stride=16, padding=8, count_include_pad=False
+        )
+        out.backward(grad2d.to(dtype).to(device))
+        return inp.grad
+
+      def compute_1d(device, dtype=dtype):
+        return torch.nn.functional.avg_pool1d(
+            x1d.to(dtype).to(device),
+            kernel_size=512,
+            stride=256,
+            padding=128,
+            count_include_pad=False,
+        )
+
+      with self.subTest(dtype=dtype, op="avg_pool2d"):
+        self.assert_close_tpu_vs_cpu(compute_2d)
+      with self.subTest(dtype=dtype, op="avg_pool2d_backward"):
+        self.assert_close_tpu_vs_cpu(compute_2d_grad)
+      with self.subTest(dtype=dtype, op="avg_pool1d"):
+        self.assert_close_tpu_vs_cpu(compute_1d)
+
   def test_bernoulli_out_dtypes(self):
     device = torch.device("tpu")
     p = torch.full((4, 4), 0.5, device=device)
