@@ -64,13 +64,8 @@
 #include "mlir/IR/MLIRContext.h"
 #include "mlir/IR/OwningOpRef.h"
 #include "stablehlo/integrations/cpp/builder/AttrTypeBuilderUtil.h"
-#include "xla/hlo/builder/xla_builder.h"
-#include "xla/hlo/builder/xla_computation.h"
-#include "xla/layout_util.h"
 #include "xla/pjrt/pjrt_client.h"
 #include "xla/pjrt/pjrt_executable.h"
-#include "xla/shape.h"
-#include "xla/shape_util.h"
 #include "xla/xla_data.pb.h"
 
 ABSL_DECLARE_FLAG(bool, torch_tpu_internal_enable_compilation_container);
