@@ -162,6 +162,23 @@ absl::Status ValidateEmbeddingBagSparseBackwardArgs(const at::Tensor& indices,
   return absl::OkStatus();
 }
 
+// Matches CUDA, whose max-mode backward kernel
+// (embedding_bag_backward_cuda_max) only supports float16, float32, and
+// float64.
+absl::Status ValidateEmbeddingBagMaxBackwardDtype(const at::Tensor& grad,
+                                                  int64_t mode) {
+  if (mode != static_cast<int64_t>(EmbeddingBagMode::kMax)) {
+    return absl::OkStatus();
+  }
+  const c10::ScalarType scalar_type = grad.scalar_type();
+  TT_RET_CHECK(scalar_type == at::kHalf || scalar_type == at::kFloat ||
+                   scalar_type == at::kDouble,
+               error::kPythonNotImplementedError)
+      << "not implemented for " << ToString(scalar_type)
+      << " when mode is 'max'";
+  return absl::OkStatus();
+}
+
 at::Tensor DispatchEmbeddingSparseBackward(const at::Tensor& grad,
                                            const at::Tensor& indices,
                                            const int64_t num_weights,
@@ -415,6 +432,12 @@ at::Tensor AtenEmbeddingBagBackward(
       (grad, indices, offsets, offset2bag, bag_size, max_indices, num_weights,
        scale_grad_by_freq, mode, sparse, per_sample_weights, padding_idx),
       {
+        // CUDA only raises the max-mode dtype error in its dense backward, so
+        // the sparse backward rejects max mode altogether
+        if (!sparse) {
+          TT_THROW_IF_ERROR(ValidateEmbeddingBagMaxBackwardDtype(grad, mode));
+        }
+
         bool has_psw =
             per_sample_weights.has_value() && per_sample_weights->defined();
         int64_t nw_val = num_weights.expect_int();

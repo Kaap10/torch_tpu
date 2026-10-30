@@ -8355,6 +8355,24 @@ Supported combinations for non-constant padding:
           torch.tensor([0, 1], dtype=torch.int64, device=et.device()),
       )
 
+  def test_embedding_bag_max_backward_bfloat16(self):
+    weight = torch.randn(
+        10, 5, dtype=torch.bfloat16, device=et.device(), requires_grad=True
+    )
+    indices = torch.tensor([7, 4, 6, 5, 9], device=et.device())
+    offsets = torch.tensor([0, 3], device=et.device())
+    out = torch.nn.functional.embedding_bag(
+        indices, weight, offsets, mode="max"
+    )
+
+    with et.assert_raises_message(
+        NotImplementedError,
+        tpu="""embedding_bag_backward(): not implemented for bfloat16 when mode is 'max'""",
+        gpu=""""embedding_bag_backward_cuda_max" not implemented for 'BFloat16'""",
+        message_reviewed_by="wan",
+    ):
+      out.sum().backward()
+
   def test_embedding_bag_include_last_offset_empty_offsets(self):
     weight = torch.randn(5, 3, dtype=torch.float32, device=et.device())
     indices = torch.tensor([], dtype=torch.int64, device=et.device())
