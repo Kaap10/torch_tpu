@@ -31,6 +31,7 @@
 #include "csrc/common/compilation_spec.h"
 #include "csrc/common/dimension_types.h"
 #include "csrc/common/error_utils.h"
+#include "csrc/common/layout_utils.h"
 #include "csrc/common/shape.h"
 #include "csrc/common/unbounded_dynamic_kernel_registry.h"
 #include "csrc/experimental/precompiled_kernels/kernel_utils.h"
@@ -542,14 +543,28 @@ UnboundedDynamicExecutionMetadata MakeNonzeroDynamicMetadata() {
       .is_compatible =
           [](absl::Span<const Shape> input_shapes,
              absl::Span<const Shape> output_shapes) {
+            // The on-device layouts of the kernel's buffer contract.
+            const std::vector<xla::Layout> expected_input_layouts = {
+                xla::Layout({1, 0}, {xla::Tile({8, 128})})};
+            const std::vector<xla::Layout> expected_output_layouts = {
+                xla::Layout({0, 1}, {xla::Tile({2, 128})})};
+            // Resolved from the device defaults and any custom layouts on the
+            // shapes.
+            const absl::StatusOr<std::vector<xla::Layout>> input_layouts =
+                ResolveXlaLayouts(input_shapes);
+            const absl::StatusOr<std::vector<xla::Layout>> output_layouts =
+                ResolveXlaLayouts(output_shapes);
+
             return input_shapes.size() == 1 &&
                    input_shapes[0].dimensions().size() == 2 &&
                    input_shapes[0].dtype() == mlir::ElementType::F32 &&
                    output_shapes.size() == 1 &&
                    output_shapes[0].dimensions().size() == 2 &&
-                   output_shapes[0].dimensions()[0] > 2 &&
                    output_shapes[0].dimensions()[1] == 2 &&
-                   output_shapes[0].dtype() == mlir::ElementType::I64;
+                   output_shapes[0].dtype() == mlir::ElementType::I64 &&
+                   input_layouts.ok() && output_layouts.ok() &&
+                   *input_layouts == expected_input_layouts &&
+                   *output_layouts == expected_output_layouts;
           },
   };
   return dynamic_meta;
