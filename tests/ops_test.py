@@ -4197,6 +4197,9 @@ class TestOps(op_testing.OpInfoTestBase):
     )
 
   def test_geqrf(self):
+    if op_testing.is_check_symbolic_shapes_mode():
+      # Triggers use-of-uninitialized errors on as_strided
+      self.skipTest("bypassing SymInt MSAN errors in upstream PyTorch")
     self.do_test_op(
         "geqrf",
         # TODO(b/561796361): PyTorch autograd backward fails with:
