@@ -22,6 +22,7 @@
 #include <vector>
 
 #include "ATen/core/ATen_fwd.h"
+#include "ATen/core/List.h"
 #include "ATen/core/TensorBody.h"
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
@@ -46,19 +47,27 @@ struct UnexpandedZeroStrideIndex {
 std::optional<UnexpandedZeroStrideIndex> TryUnexpandZeroStrideIndex(
     const at::Tensor& index);
 
-// Transfers CPU auxiliary index or boolean mask tensors to TPU via
-// `CopyToTpuTensor` without triggering PyTorch dispatcher re-entry or
-// `CompositeOpCheck` failures during tracing. Returns defined TPU tensors and
-// undefined tensors unchanged.
-absl::StatusOr<at::Tensor> ResolveAuxiliaryTensorDevice(
-    const at::Tensor& tensor,
-    std::optional<c10::DeviceIndex> tpu_device_index = std::nullopt);
+// Resolves negative indices by converting them to positive indices.
+//
+// All `indices` must already be on TPU; callers move CPU index tensors to TPU
+// with `MoveIndexToDevice` first.
+absl::Status ResolveNegativeIndices(std::vector<at::Tensor>& indices,
+                                    at::IntArrayRef sizes,
+                                    const Indices& dimensions);
 
-// Resolves negative indices by converting them to positive indices
-absl::Status ResolveNegativeIndices(
-    std::vector<at::Tensor>& indices, at::IntArrayRef sizes,
-    const Indices& dimensions,
-    std::optional<c10::DeviceIndex> tpu_device_index = std::nullopt);
+// Checks that every defined tensor in `indices` has dtype bool, int32 or int64
+// (uint8 is rejected), and is either on CPU or on the same device as `self`,
+// matching PyTorch's advanced indexing device rules
+// (`dev_tensor[{cpu,dev}_tensor]`).
+absl::Status ValidateIndexDtypesAndDevices(
+    const at::Tensor& self,
+    const c10::List<std::optional<at::Tensor>>& indices);
+
+// Returns `index` on the TPU `device`, copying it there if it is on CPU (i.e. a
+// CPU index tensor used to index a TPU tensor). `index` must be on CPU or
+// already on `device`, as checked by `ValidateIndexDtypesAndDevices`.
+absl::StatusOr<at::Tensor> MoveIndexToDevice(const at::Tensor& index,
+                                             const c10::Device& device);
 
 absl::StatusOr<int64_t> ValidateIndexInputsAndGetDim(const at::Tensor& self,
                                                      int64_t dim,
