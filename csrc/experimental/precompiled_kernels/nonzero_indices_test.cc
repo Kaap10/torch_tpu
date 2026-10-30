@@ -251,8 +251,8 @@ TEST_F(NonzeroIndicesTest, UnboundedDynamicCacheServesKernel) {
     }
     const Shape output_shape({k, 2}, mlir::ElementType::I64);
 
-    const int64_t hits_before = cache.GetCacheHits();
-    const int64_t misses_before = cache.GetCacheMisses();
+    const int64_t dynamic_hits_before =
+        cache.GetCacheStats().num_unbounded_dynamic_hits;
     TT_ASSERT_OK_AND_ASSIGN(
         CompiledKernel kernel,
         cache.GetOrCompile(
@@ -263,14 +263,8 @@ TEST_F(NonzeroIndicesTest, UnboundedDynamicCacheServesKernel) {
                      << "nonzero must be served by the registered kernel";
             },
             xla::CompileOptions()));
-    // The first lookup misses and builds the kernel; later ones hit it.
-    if (registered == nullptr) {
-      EXPECT_EQ(cache.GetCacheHits(), hits_before);
-      EXPECT_EQ(cache.GetCacheMisses(), misses_before + 1);
-    } else {
-      EXPECT_EQ(cache.GetCacheHits(), hits_before + 1);
-      EXPECT_EQ(cache.GetCacheMisses(), misses_before);
-    }
+    EXPECT_EQ(cache.GetCacheStats().num_unbounded_dynamic_hits,
+              dynamic_hits_before + 1);
     TT_ASSERT_OK_AND_ASSIGN(SharedLoadedExecutableWithMetadata executable,
                             kernel.fixed_shape_kernel.get());
     ASSERT_TRUE(executable->unbounded_dynamic_execution_metadata().has_value());
