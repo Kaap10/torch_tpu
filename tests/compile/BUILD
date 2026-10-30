@@ -638,6 +638,7 @@ torch_tpu_py_test(
     srcs = ["clone_mutated_returned_placeholders_test.py"],
     deps = [
         "//shims/absl_py/testing:absltest",
+        "//shims/absl_py/testing:parameterized",
         "//shims/torch:pytorch",
         "//src/torch_tpu",
         "//src/torch_tpu/_internal/compile/fx_passes:clone_mutated_returned_placeholders",
