@@ -349,6 +349,7 @@ absl::StatusOr<ExecutionTask> ExecutionTask::FromTraversal(
   if (ABSL_VLOG_IS_ON(1)) {
     task_name = absl::StrCat(compiled_traversal_or->compilation_cache_key);
   }
+  const CorePinningMode core_pinning_mode = traversal->core_pinning_mode();
   Traversal::Parts traversal_parts = traversal->IntoParts();
   // Fixed-shape eager traversals without pinned-host buffers extract and key
   // compilation on the exact custom layouts of `arguments`, so runtime layout
@@ -366,10 +367,11 @@ absl::StatusOr<ExecutionTask> ExecutionTask::FromTraversal(
        llvm::any_of(traversal_parts.outputs, is_pinned_host))
           ? ArgumentLayoutValidation::kValidate
           : ArgumentLayoutValidation::kSkip;
-  return ExecutionTask(
-      std::move(task_name), std::move(traversal_parts.arguments),
-      std::move(traversal_parts.outputs),
-      std::move(compiled_traversal_or->compiled_kernel), layout_validation);
+  return ExecutionTask(std::move(task_name),
+                       std::move(traversal_parts.arguments),
+                       std::move(traversal_parts.outputs),
+                       std::move(compiled_traversal_or->compiled_kernel),
+                       layout_validation, core_pinning_mode);
 }
 
 absl::StatusOr<ExecutionTask> ExecutionTask::FromExecutable(

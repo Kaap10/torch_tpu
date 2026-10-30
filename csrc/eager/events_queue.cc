@@ -202,6 +202,7 @@ class StreamState {
       deferred_op_event.deferred_op_hash = 0;
     }
     futures_.clear();
+    last_device_output_.reset();
     last_snapshot_future_ = xla::Future<void>(absl::OkStatus());
   }
 
@@ -391,7 +392,11 @@ class StreamState {
   }
 
   void WriteBackMaterializationFutures(
-      std::vector<xla::Future<void>>&& futures) {
+      std::vector<xla::Future<void>>&& futures,
+      std::optional<DeviceBufferRef> last_device_output) {
+    // Destroy any replaced DeviceBufferRef outside `mu_` to avoid running
+    // `~PjRtCApiBuffer()` while holding `StreamState::mu_` on the hot path.
+    std::optional<DeviceBufferRef> old_device_output;
     absl::MutexLock lock(mu_);
     for (auto& ready_work_item : ready_work_) {
       if (auto* snapshot_request =
@@ -400,11 +405,20 @@ class StreamState {
         existing_futures.insert(existing_futures.end(),
                                 std::make_move_iterator(futures.begin()),
                                 std::make_move_iterator(futures.end()));
+        if (last_device_output.has_value()) {
+          old_device_output =
+              std::exchange(snapshot_request->last_device_output,
+                            std::move(last_device_output));
+        }
         return;
       }
     }
     futures_.insert(futures_.end(), std::make_move_iterator(futures.begin()),
                     std::make_move_iterator(futures.end()));
+    if (last_device_output.has_value()) {
+      old_device_output =
+          std::exchange(last_device_output_, std::move(last_device_output));
+    }
   }
 
  private:
@@ -540,7 +554,7 @@ class StreamState {
     // bypass insertion into deferred_ops_), or a compiled execution task which
     // have been recorded since the last snapshot request.
     PruneCompletedFutures(futures_);
-    bool is_no_op = futures_.empty();
+    bool is_no_op = futures_.empty() && !last_device_output_.has_value();
     PopNoOpWorkLocked(is_no_op);
 
     if (is_no_op && !ready_work_.empty() &&
@@ -574,6 +588,7 @@ class StreamState {
     last_snapshot_future_ = std::move(chaining_future);
     SnapshotRequest new_snapshot_request{
         .futures = std::move(futures_),
+        .last_device_output = std::exchange(last_device_output_, std::nullopt),
         .snapshot_promise = std::move(snapshot_promise),
     };
     ready_work_.push_back(std::move(new_snapshot_request));
@@ -585,6 +600,7 @@ class StreamState {
   xla::Future<void> last_snapshot_future_ ABSL_GUARDED_BY(mu_) =
       xla::Future<void>(absl::OkStatus());
   std::vector<xla::Future<void>> futures_ ABSL_GUARDED_BY(mu_);
+  std::optional<DeviceBufferRef> last_device_output_ ABSL_GUARDED_BY(mu_);
 
   std::deque<DeferredOpEvent> deferred_ops_ ABSL_GUARDED_BY(mu_);
   std::vector<ReadyWork> ready_work_ ABSL_GUARDED_BY(mu_);
@@ -1078,11 +1094,13 @@ void InsertGraphBreak(c10::DeviceIndex device_index, c10::StreamId stream_id,
       ->InsertGraphBreak(std::move(must_materialize), reason, mode, eager_mode);
 }
 
-void WriteBackMaterializationFutures(c10::DeviceIndex device_index,
-                                     c10::StreamId stream_id,
-                                     std::vector<xla::Future<void>>&& futures) {
+void WriteBackMaterializationFutures(
+    c10::DeviceIndex device_index, c10::StreamId stream_id,
+    std::vector<xla::Future<void>>&& futures,
+    std::optional<DeviceBufferRef> last_device_output) {
   GetOrCreateStreamState(device_index, stream_id)
-      ->WriteBackMaterializationFutures(std::move(futures));
+      ->WriteBackMaterializationFutures(std::move(futures),
+                                        std::move(last_device_output));
 }
 
 }  // namespace torch_tpu

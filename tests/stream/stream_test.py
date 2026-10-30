@@ -350,8 +350,11 @@ class TpuStreamsTest(seed_test_utils.RepeatableTest):
     x = torch.ones(1, device='cpu').to('tpu')
     y = torch.ones(1, device='cpu').to('tpu')
     with torch.tpu.stream(new_stream):
-      actual = (x + y).item()
-    self.assertEqual(actual, 2)
+      z = x + y
+      event = new_stream.record_event()
+    event.synchronize()
+    self.assertTrue(event.query())
+    self.assertEqual(z.item(), 2)
 
   def test_stream_pinned_to_tensor_core(self):
     """Tests that a stream can be pinned to a dense core."""

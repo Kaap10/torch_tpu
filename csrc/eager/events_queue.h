@@ -203,6 +203,9 @@ using CompiledExecution = ExecutionTask;
 struct SnapshotRequest {
   // Futures that must be completed before the snapshot is reached.
   std::vector<xla::Future<void>> futures;
+  // The latest device-resident TensorCore eager output buffer on the stream
+  // prior to this snapshot request, if any.
+  std::optional<DeviceBufferRef> last_device_output;
   // When the execution for the traversals has started, an EventSnapshot will be
   // created and provided through this promise.
   xla::Promise<std::shared_ptr<EventSnapshot>> snapshot_promise;
@@ -224,9 +227,10 @@ void InsertGraphBreak(c10::DeviceIndex device_index, c10::StreamId stream_id,
                       std::vector<SharedDeviceBufferList> must_materialize,
                       MaterializationReason reason, GraphSplitMode mode);
 
-void WriteBackMaterializationFutures(c10::DeviceIndex device_index,
-                                     c10::StreamId stream_id,
-                                     std::vector<xla::Future<void>>&& futures);
+void WriteBackMaterializationFutures(
+    c10::DeviceIndex device_index, c10::StreamId stream_id,
+    std::vector<xla::Future<void>>&& futures,
+    std::optional<DeviceBufferRef> last_device_output = std::nullopt);
 
 }  // namespace torch_tpu
 

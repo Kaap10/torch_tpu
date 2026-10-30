@@ -144,11 +144,13 @@ torch_tpu_cc_test(
         ":device_buffer_utils",
         ":eager_mode",
         ":events_queue",
+        ":execution_task",
         ":materialize",
         ":split_traversal",
         ":structured_log_buffer",
         ":tensor_to_buffer",
         ":tpu_hooks",
+        ":traversal",
         "//csrc/common:cache_key",
         "//csrc/common:compilation",
         "//csrc/common:compilation_cache",
@@ -174,6 +176,8 @@ torch_tpu_cc_test(
         "@stablehlo//stablehlo/integrations/cpp/builder:attr_type_builder_util",
         "@stablehlo//stablehlo/integrations/cpp/builder:mlir_builder",
         "@stablehlo//stablehlo/integrations/cpp/builder:stablehlo_builder",
+        "@xla//xla:future",
+        "@xla//xla/pjrt:pjrt_client",
     ],
 )
 
@@ -483,6 +487,7 @@ torch_tpu_cc_library(
         ":split_traversal",
         ":structured_log_buffer",
         ":traversal_utils",
+        "//csrc/common:cache_key",
         "//csrc/common:compilation",
         "//csrc/common:context_manager",
         "//csrc/common:error_utils",
@@ -505,6 +510,7 @@ torch_tpu_cc_library(
         "@com_google_absl//absl/types:span",
         "@llvm-project//mlir:IR",
         "@xla//xla:future",
+        "@xla//xla/pjrt:pjrt_client",
     ],
 )
 
