@@ -206,7 +206,6 @@ class StreamState {
     futures_.clear();
     last_device_output_.reset();
     transfer_blocks_.clear();
-    last_snapshot_future_ = xla::Future<void>(absl::OkStatus());
   }
 
   // If a deferred op has no side effects, then as soon as all of its DataPtrs
@@ -573,65 +572,13 @@ class StreamState {
     }
   }
 
-  void PopNoOpWorkLocked(bool& is_no_op) ABSL_EXCLUSIVE_LOCKS_REQUIRED(mu_) {
-    while (is_no_op && !ready_work_.empty()) {
-      auto& prev_work_block = ready_work_.back();
-      if (std::holds_alternative<SnapshotRequest>(prev_work_block)) {
-        // There has been no meaningful work since the last snapshot.
-        // We can reuse the previous snapshot promise.
-        return;
-      }
-      if (std::holds_alternative<CompiledExecution>(prev_work_block)) {
-        is_no_op = false;
-        return;
-      }
-      auto& prev_eager_execution = std::get<EagerExecution>(prev_work_block);
-      if (!prev_eager_execution.must_execute.empty()) {
-        is_no_op = false;
-        return;
-      }
-      // This may potentially miss nodes that are "must materialize" but already
-      // being handled by a previous snapshot.
-      // Ex: foo(); record_event(); bar(); record_event(must_materialize=[foo])
-      // foo will be materialized by the first event, but may still have
-      // is_materializing()==false when the second snapshot is created.
-      // If there is a placeholder here (which should never happen) it is
-      // retained for downstream error propagation.
-      if (std::any_of(prev_eager_execution.must_materialize.begin(),
-                      prev_eager_execution.must_materialize.end(),
-                      [](const SharedDeviceBufferList& node) {
-                        return !node->is_materializing();
-                      })) {
-        is_no_op = false;
-        return;
-      }
-      ready_work_.pop_back();
-    }
-  }
-
   xla::Future<std::shared_ptr<EventSnapshot>> RequestEventSnapshotLocked(
       std::vector<SharedDeviceBufferList> must_materialize,
       MaterializationReason reason, GraphSplitMode mode, EagerMode eager_mode)
       ABSL_EXCLUSIVE_LOCKS_REQUIRED(mu_) {
     InsertGraphBreakLocked(std::move(must_materialize), reason, mode,
                            eager_mode, std::nullopt);
-    // Check if this event snapshot is a no-op.
-    // An event snapshot is meaningful only if it has futures to wait on,
-    // must-execute deferred ops, must_materialize deferred constants (which
-    // bypass insertion into deferred_ops_), or a compiled execution task which
-    // have been recorded since the last snapshot request.
     PruneCompletedFutures(futures_);
-    bool is_no_op = futures_.empty() && !last_device_output_.has_value();
-    PopNoOpWorkLocked(is_no_op);
-
-    if (is_no_op && !ready_work_.empty() &&
-        std::holds_alternative<SnapshotRequest>(ready_work_.back())) {
-      SnapshotRequest& last_snapshot_request =
-          std::get<SnapshotRequest>(ready_work_.back());
-      // When the most-recent real snapshot is created, the caller of this
-      // function will receive a shared_ptr copy of it.
-      return last_snapshot_request.snapshot_promise.future<>();
-    }
 
     // Explanation: synchronizing the last EventSnapshot should also await all
     // prior EventSnapshots. We achieve this by chaining a promise/future;
@@ -640,23 +587,17 @@ class StreamState {
     auto [snapshot_promise, snapshot_future] =
         xla::MakePromise<std::shared_ptr<EventSnapshot>>();
     auto [chaining_promise, chaining_future] = xla::MakePromise<void>();
-    if (!last_snapshot_future_.IsKnownReady()) {
-      futures_.push_back(std::move(last_snapshot_future_));
-    }
-    last_snapshot_future_ = std::move(chaining_future);
     SnapshotRequest new_snapshot_request{
         .futures = std::move(futures_),
         .last_device_output = std::exchange(last_device_output_, std::nullopt),
         .snapshot_promise = std::move(snapshot_promise),
         .ok_callback_promise = std::move(chaining_promise)};
     ready_work_.push_back(std::move(new_snapshot_request));
-    futures_.clear();
+    futures_.push_back(std::move(chaining_future));
     return snapshot_future;
   }
 
   absl::Mutex mu_;
-  xla::Future<void> last_snapshot_future_ ABSL_GUARDED_BY(mu_) =
-      xla::Future<void>(absl::OkStatus());
   std::vector<xla::Future<void>> futures_ ABSL_GUARDED_BY(mu_);
   std::optional<DeviceBufferRef> last_device_output_ ABSL_GUARDED_BY(mu_);
   std::vector<xla::Future<void>> transfer_blocks_ ABSL_GUARDED_BY(mu_);

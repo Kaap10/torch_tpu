@@ -136,6 +136,9 @@ class EventSnapshot {
   // fails.
   xla::Future<void> OkCallback();
 
+  // Directly returns the wrapped future.
+  xla::Future<void> completion_future() const { return future_; }
+
  private:
   // The completion of an event snapshot, shared with the callback on its future
   // that records it.

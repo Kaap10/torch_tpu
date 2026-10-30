@@ -887,163 +887,6 @@ TEST_F(EventsQueueTest, NodeMatcherAcrossSmallAndLargeSpans) {
   }
 }
 
-TEST_F(EventsQueueTest, GraphBreakRetainsNoOpEagerExecution) {
-  ClearAllStreams();
-  ScopedPythonContextCapturer capturer(OpName::kEmpty);
-  Shape shape(Dimensions{8}, mlir::ElementType::F32);
-  const auto [device_index, stream_id] = GetCurrentDeviceStreamId();
-  // Create an already-pending DeviceBufferList.
-  TT_ASSERT_OK_AND_ASSIGN(
-      auto pending_ref,
-      DeviceBufferList::CreatePendingExecution(shape, device_index, stream_id));
-
-  // Insert a graph break with this as "must materialize".
-  InsertGraphBreak(device_index, stream_id, {pending_ref.device_buffer_list()},
-                   MaterializationReason::kUnknown,
-                   GraphSplitMode::kSplitGraph);
-
-  // Add some real work and a second graph break.
-  TT_ASSERT_OK_AND_ASSIGN(auto refs_a, DeviceBufferList::CreateDeferred(
-                                           OpName::kAdd, DummyBuilder, {},
-                                           OpParamCacheKeys::Empty(), {shape}));
-  auto ref_a = refs_a[0];
-  RecordDeferredOpCreated(ref_a.device_buffer_list());
-  InsertGraphBreak(device_index, stream_id, {}, MaterializationReason::kUnknown,
-                   GraphSplitMode::kSplitGraph);
-
-  auto ready_work = GetReadyWork(device_index, stream_id);
-  ASSERT_EQ(ready_work.size(), 2);
-  ASSERT_TRUE(std::holds_alternative<EagerExecution>(ready_work[0]));
-
-  // The first EagerExecution has no must_execute and the must_materialize
-  // contains the pending DeviceBufferList.
-  const auto& eager_execution = std::get<EagerExecution>(ready_work[0]);
-  EXPECT_TRUE(eager_execution.must_execute.empty());
-  EXPECT_THAT(eager_execution.must_materialize,
-              testing::ElementsAre(pending_ref.device_buffer_list()));
-
-  // The second EagerExecution has the real work.
-  ASSERT_TRUE(std::holds_alternative<EagerExecution>(ready_work[1]));
-  const auto& eager_execution2 = std::get<EagerExecution>(ready_work[1]);
-  EXPECT_THAT(eager_execution2.must_execute,
-              testing::ElementsAre(ref_a.device_buffer_list()));
-  EXPECT_TRUE(eager_execution2.must_materialize.empty());
-}
-
-TEST_F(EventsQueueTest, EventSnapshotDropsTrailingNoOpEagerExecution) {
-  ClearAllStreams();
-  ScopedPythonContextCapturer capturer(OpName::kEmpty);
-  Shape shape(Dimensions{8}, mlir::ElementType::F32);
-  const auto [device_index, stream_id] = GetCurrentDeviceStreamId();
-  // Create an already-pending DeviceBufferList.
-  TT_ASSERT_OK_AND_ASSIGN(
-      auto pending_ref,
-      DeviceBufferList::CreatePendingExecution(shape, device_index, stream_id));
-
-  // Insert a graph break with this as "must materialize".
-  InsertGraphBreak(device_index, stream_id, {pending_ref.device_buffer_list()},
-                   MaterializationReason::kUnknown,
-                   GraphSplitMode::kSplitGraph);
-
-  // Add some real work and a second graph break.
-  TT_ASSERT_OK_AND_ASSIGN(auto refs_a, DeviceBufferList::CreateDeferred(
-                                           OpName::kAdd, DummyBuilder, {},
-                                           OpParamCacheKeys::Empty(), {shape}));
-  auto ref_a = refs_a[0];
-  RecordDeferredOpCreated(ref_a.device_buffer_list());
-  InsertGraphBreak(device_index, stream_id, {}, MaterializationReason::kUnknown,
-                   GraphSplitMode::kSplitGraph);
-
-  // Add the already-pending DeviceBufferList graph break again.
-  InsertGraphBreak(device_index, stream_id, {pending_ref.device_buffer_list()},
-                   MaterializationReason::kUnknown,
-                   GraphSplitMode::kSplitGraph);
-
-  // Record an event snapshot.
-  (void)EventSnapshot::Record(device_index, stream_id);
-
-  auto ready_work = GetReadyWork(device_index, stream_id);
-
-  // When the snapshot is recorded, it will drop the second no-op graph break.
-  // But it will stop popping when it hits a non-no-op EagerExecution.
-  // This will retain the first no-op graph break.
-  ASSERT_EQ(ready_work.size(), 3);
-  ASSERT_TRUE(std::holds_alternative<EagerExecution>(ready_work[0]));
-
-  // The first EagerExecution has no must_execute and the must_materialize
-  // contains the pending DeviceBufferList.
-  const auto& eager_execution = std::get<EagerExecution>(ready_work[0]);
-  EXPECT_TRUE(eager_execution.must_execute.empty());
-  EXPECT_THAT(eager_execution.must_materialize,
-              testing::ElementsAre(pending_ref.device_buffer_list()));
-
-  // The second EagerExecution has the real work.
-  ASSERT_TRUE(std::holds_alternative<EagerExecution>(ready_work[1]));
-  const auto& eager_execution2 = std::get<EagerExecution>(ready_work[1]);
-  EXPECT_THAT(eager_execution2.must_execute,
-              testing::ElementsAre(ref_a.device_buffer_list()));
-  EXPECT_TRUE(eager_execution2.must_materialize.empty());
-
-  // After the second eager execution is the snapshot request; the second
-  // no-op graph break is dropped.
-  ASSERT_TRUE(std::holds_alternative<SnapshotRequest>(ready_work[2]));
-}
-
-TEST_F(EventsQueueTest, DroppedNoOpExecutionsAllowSnapshotReuse) {
-  ClearAllStreams();
-  ScopedPythonContextCapturer capturer(OpName::kEmpty);
-  Shape shape(Dimensions{8}, mlir::ElementType::F32);
-  const auto [device_index, stream_id] = GetCurrentDeviceStreamId();
-
-  // Create a future we control and push it to the events queue.
-  auto [promise, future] = xla::MakePromise<void>();
-  internal::MarkStreamActive(device_index, stream_id, std::move(future));
-
-  // Record a snapshot. This will contain the above future.
-  auto snapshot_future = EventSnapshot::Record(device_index, stream_id);
-
-  // Create an already-pending DeviceBufferList.
-  TT_ASSERT_OK_AND_ASSIGN(
-      auto pending_ref,
-      DeviceBufferList::CreatePendingExecution(shape, device_index, stream_id));
-
-  // Insert a graph break with this as "must materialize".
-  InsertGraphBreak(device_index, stream_id, {pending_ref.device_buffer_list()},
-                   MaterializationReason::kUnknown,
-                   GraphSplitMode::kSplitGraph);
-
-  // Record a second snapshot.
-  auto snapshot_future2 = EventSnapshot::Record(device_index, stream_id);
-
-  auto ready_work = GetReadyWork(device_index, stream_id);
-
-  // Pushing the second snapshot request will drop the no-op EagerExecution
-  // and reuse the first snapshot's future.
-  EXPECT_EQ(ready_work.size(), 1);
-  EXPECT_TRUE(std::holds_alternative<SnapshotRequest>(ready_work[0]));
-  auto& snapshot_request = std::get<SnapshotRequest>(ready_work[0]);
-  EXPECT_EQ(snapshot_request.futures.size(), 1);
-
-  // When a snapshot is created, it is shared between the original request and
-  // the second request after the no-op.
-  auto [snapshot_ok_promise, snapshot_ok_future] = xla::MakePromise<void>();
-  std::shared_ptr<EventSnapshot> snapshot = std::make_shared<EventSnapshot>(
-      std::move(snapshot_request.futures[0]), std::move(snapshot_ok_promise));
-  snapshot_request.snapshot_promise.Set(std::move(snapshot));
-  ASSERT_TRUE(snapshot_future.IsReady());
-  ASSERT_TRUE(snapshot_future2.IsReady());
-  TT_ASSERT_OK_AND_ASSIGN(auto snapshot_1, snapshot_future.Await());
-  TT_ASSERT_OK_AND_ASSIGN(auto snapshot_2, snapshot_future.Await());
-  EXPECT_EQ(snapshot_1, snapshot_2);
-
-  // Completing the original future completes the snapshot for both.
-  promise.Set(absl::OkStatus());
-  TT_ASSERT_OK_AND_ASSIGN(bool completed, snapshot_1->Query());
-  EXPECT_TRUE(completed);
-  TT_ASSERT_OK_AND_ASSIGN(completed, snapshot_2->Query());
-  EXPECT_TRUE(completed);
-}
-
 // Returns `duration` in milliseconds, the unit of EventSnapshot::ElapsedTime.
 double ToMilliseconds(std::chrono::steady_clock::duration duration) {
   return std::chrono::duration<double, std::milli>(duration).count();
@@ -1139,73 +982,31 @@ TEST(EventSnapshotTest, ElapsedTimeReturnsEventError) {
             error::kInvalidArgument);
 }
 
-TEST_F(EventsQueueTest, HandleNoOpSnapshotsEfficiently) {
+TEST_F(EventsQueueTest, CompletesLongSnapshotChainOnSmallStack) {
   ClearAllStreams();
   const auto [device_index, stream_id] = GetCurrentDeviceStreamId();
 
   // Create a small amount of "work" which will complete when we choose.
   auto [promise, future] = xla::MakePromise<void>();
   internal::MarkStreamActive(device_index, stream_id, std::move(future));
-
-  // Record 9999 snapshots without starting their materialization.
-  // On the 10000th snapshot, start the materialization for these 10,000.
   std::vector<xla::Future<std::shared_ptr<EventSnapshot>>> snapshot_futures;
-  snapshot_futures.reserve(30000);
-  for (int i = 0; i < 9999; ++i) {
-    snapshot_futures.push_back(EventSnapshot::Record(device_index, stream_id));
+  for (int i = 0; i < 20000; ++i) {
+    snapshot_futures.push_back(
+        MaterializeCurrentStream(MaterializationReason::kExplicitSync));
   }
-  snapshot_futures.push_back(MaterializeStream(
-      device_index, stream_id, MaterializationReason::kUnknown));
-  ASSERT_TRUE(snapshot_futures.back().Await().ok());
-
-  // Push another 20,000 snapshot requests.
-  for (int i = 10000; i < 30000; ++i) {
-    snapshot_futures.push_back(MaterializeStream(
-        device_index, stream_id, MaterializationReason::kUnknown));
+  std::shared_ptr<EventSnapshot> last_snapshot;
+  for (const auto& snapshot_future : snapshot_futures) {
+    TT_ASSERT_OK_AND_ASSIGN(last_snapshot, snapshot_future.Await());
   }
-  ASSERT_TRUE(snapshot_futures.back().Await().ok());
+  TT_ASSERT_OK_AND_ASSIGN(bool completed, last_snapshot->Query());
+  ASSERT_FALSE(completed);
 
-  // Snapshots [0, 9999] are all the same EventSnapshot; snapshot 0 is created
-  // to hold the transfer future, and then snapshots [1, 9999] are copies of it.
-  TT_ASSERT_OK_AND_ASSIGN(std::shared_ptr<EventSnapshot> snapshot_0,
-                          snapshot_futures[0].Await());
-  TT_ASSERT_OK_AND_ASSIGN(bool completed, snapshot_0->Query());
-  EXPECT_FALSE(completed);
-  for (int i = 1; i < 9999; ++i) {
-    TT_ASSERT_OK_AND_ASSIGN(std::shared_ptr<EventSnapshot> snapshot_i,
-                            snapshot_futures[i].Await());
-    EXPECT_EQ(snapshot_0, snapshot_i);
-  }
-
-  // Snapshots [10000, 29999] are all shared_ptrs to different EventSnapshot
-  // objects, but all these EventSnapshot objects have the same backing XLA
-  // future.
-  for (int i = 10000; i < 30000; ++i) {
-    TT_ASSERT_OK_AND_ASSIGN(std::shared_ptr<EventSnapshot> snapshot_i,
-                            snapshot_futures[i].Await());
-    EXPECT_NE(snapshot_0, snapshot_i);
-  }
-
-  // At this point we have at 30k futures to EventSnapshot, of which there are
-  // 20,001 distinct EventSnapshots, with only 2 distinct XLA futures (chained).
-
-  // Complete the transfer and synchronize the first snapshot, which should
-  // complete all snapshots.
+  // The runtime completes device work on threads with 1 MiB stacks.
   std::unique_ptr<tsl::Thread> thread(tsl::Env::Default()->StartThread(
       tsl::ThreadOptions{.stack_size = 1 << 20}, "complete_transfer",
-      [promise = std::move(promise)]() mutable { promise.Set(); }));
+      [&promise] { promise.Set(); }));
   thread.reset();
-  ASSERT_TRUE(snapshot_0->Synchronize().ok());
-  TT_ASSERT_OK_AND_ASSIGN(completed, snapshot_0->Query());
-  EXPECT_TRUE(completed);
-
-  // All other snapshots must now also be complete.
-  for (int i = 1; i < 30000; ++i) {
-    TT_ASSERT_OK_AND_ASSIGN(std::shared_ptr<EventSnapshot> snapshot_i,
-                            snapshot_futures[i].Await());
-    TT_ASSERT_OK_AND_ASSIGN(completed, snapshot_i->Query());
-    EXPECT_TRUE(completed);
-  }
+  EXPECT_TRUE(last_snapshot->Synchronize().ok());
 }
 
 TEST_F(EventsQueueTest, OkCallbackReturnsOkAfterError) {
