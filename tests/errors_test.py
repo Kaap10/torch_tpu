@@ -8432,7 +8432,7 @@ Supported combinations for non-constant padding:
         RuntimeError,
         tpu=f"""{op_name}(): expected inputs to have the same shape, got [2] vs [3]""",
         gpu="""inconsistent tensor size, expected tensor [2] and src [3] to have the same number of elements, but got 2 and 3 elements respectively""",
-        message_reviewed_by="cbasile",
+        message_reviewed_by="gunhyun",
     ):
       op(lhs, rhs)
 
